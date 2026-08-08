@@ -69,7 +69,20 @@ const MAX_LAYOVER_SEC = 2400;
  * minutes therefore supports 11 本/時 per road, comfortably above the 20 本/時
  * the 朝ラッシュ asks of the pair. Anything longer runs 入庫 to 鷺沼 instead.
  */
-const OIMACHI_MAX_LAYOVER_SEC = 800;
+const OIMACHI_MAX_LAYOVER_SEC = 1000;
+/**
+ * The same question at 溝の口, where the answer is set by the two 引上線.
+ *
+ * A shunted 折り返し books a tail track for the whole layover plus a minute of
+ * yard margin either side, and there are two of them: at 16 本/時 the pair can
+ * absorb `2 × 900 / (layover + 120)` of the four turnbacks in each 15-minute
+ * cycle. Two of the four fit comfortably at a quarter-hour layover; a formation
+ * wanting longer than that would take a tail track out of circulation for two
+ * whole cycles and push the next 各停 onto a platform face. Fifteen minutes is
+ * therefore the cut-off, and a chain that wants more runs 入庫 to 鷺沼 — eight
+ * minutes away, and where a formation standing still costs nothing.
+ */
+const MIZONOKUCHI_MAX_LAYOVER_SEC = 960;
 /** A layover longer than this becomes an explicit `stable` leg in the duty. */
 const STABLE_LEG_MIN_SEC = 1200;
 /**
@@ -219,8 +232,11 @@ export function buildOimachiProject(): ProjectDocument {
    * else there is either a 引上線 (溝の口) or plenty of platform (鷺沼), so the
    * old blanket 40 minutes still applies.
    */
-  const terminalLayoverCap = (stationId: StationId): number =>
-    stationId === facts.S.oimachi ? OIMACHI_MAX_LAYOVER_SEC : MAX_LAYOVER_SEC;
+  const terminalLayoverCap = (stationId: StationId): number => {
+    if (stationId === facts.S.oimachi) return OIMACHI_MAX_LAYOVER_SEC;
+    if (stationId === facts.S.mizonokuchi) return MIZONOKUCHI_MAX_LAYOVER_SEC;
+    return MAX_LAYOVER_SEC;
+  };
 
   const pools: Array<{ cars: number; chains: DutyNode[][] }> = [CARS.express, CARS.local].map(
     (cars) => ({
@@ -269,34 +285,100 @@ export function buildOimachiProject(): ProjectDocument {
    * the sweep or the road will already be gone when the 回送 is pathed.
    */
   const CHAIN_END_RESERVE_SEC = DEPOT_TURN_MARGIN_SEC;
+  /**
+   */
   for (const pool of pools) {
     for (const chain of pool.chains) {
-      const head = assignables.get(chain[0]!.trainId);
-      if (head !== undefined && head.stops[0]!.stationId !== saginumaStationId) {
+      const first = chain[0]!;
+      const head = assignables.get(first.trainId);
+      const headStation = head?.stops[0]!.stationId;
+      if (head !== undefined && headStation !== undefined && headStation !== saginumaStationId) {
         head.reserveBeforeOriginSec = CHAIN_END_RESERVE_SEC;
       }
-      const tail = assignables.get(chain[chain.length - 1]!.trainId);
-      if (tail !== undefined) tail.reserveAfterTerminusSec = CHAIN_END_RESERVE_SEC;
+      const last = chain[chain.length - 1]!;
+      const tail = assignables.get(last.trainId);
+      const tailStation = tail?.stops[tail.stops.length - 1]!.stationId;
+      if (tail !== undefined && tailStation !== undefined) {
+        tail.reserveAfterTerminusSec = CHAIN_END_RESERVE_SEC;
+      }
     }
   }
 
+  /**
+   * How every 折り返し inside a chain is actually worked.
+   *
+   * Two plans, and the difference is the 引上線:
+   *
+   * - **In place.** The formation reverses on the road it arrived at and stands
+   *   there for the whole layover. One road, one continuous occupation. It is
+   *   the only thing 大井町 can do, and it is what 溝の口 does when the tail
+   *   tracks are full.
+   * - **Shunted.** 溝の口 is 島式2面4線 — 2・3番線 are the 大井町線 faces, the
+   *   構内図 marks 2番線 降車専用 and 3番線 大井町方面 — plus two 引上線 on the
+   *   梶が谷 side. The formation berths at 2番線, empties, shunts out to a 引上線
+   *   for the body of the layover and comes back into 3番線 to load. That is
+   *   what the tail tracks are *for*: a turning train does not squat on a
+   *   platform. Each platform face is then held for fifty seconds instead of a
+   *   quarter of an hour.
+   *
+   * Which one a link gets is decided here, before the 番線 sweep, because the
+   * sweep has to know whether the arrival and the departure are one occupation
+   * or two. A tail track is claimed first-come-first-served in arrival order —
+   * the order a real 信号扱所 would work in — and a link that cannot get one
+   * reverses in place. At 16 本/時 that leaves the 急行, whose layover is the
+   * longest, standing on 3番線 while the two 各停 either side of it use the
+   * 引上線: two tail tracks cannot hold three quarter-hour layovers.
+   */
+  interface ShuntPlan {
+    stationId: StationId;
+    trackId: StationTrackId;
+    from: Sec;
+    to: Sec;
+  }
+  /** Keyed by the ARRIVING train of the link. */
+  const shuntedLinks = new Map<TrainId, ShuntPlan>();
   const turnbackLinks: TurnbackLink[] = [];
+  const chainLinks: Array<{ a: DutyNode; b: DutyNode; cars: number }> = [];
   for (const pool of pools) {
     for (const chain of pool.chains) {
       for (let i = 0; i + 1 < chain.length; i++) {
         const a = chain[i]!;
         const b = chain[i + 1]!;
         if (a.terminusStationId !== b.originStationId) continue;
-        // A long layover is not an in-place reversal: the formation is berthed
-        // somewhere in between, and `stable` legs below say where.
-        if (b.depSec - a.arrSec >= berthAfterSec(a.terminusStationId)) continue;
-        turnbackLinks.push({ arrivingTrainId: a.trainId, departingTrainId: b.trainId });
-        // Authored intent, for the 折り返し dwell reason and the yard view. The
-        // occupancy model deliberately does not depend on it — see occupancy.ts.
-        const arriving = assignables.get(a.trainId)!.stops;
-        arriving[arriving.length - 1]!.operation = 'turnback';
+        chainLinks.push({ a, b, cars: pool.cars });
       }
     }
+  }
+  chainLinks.sort(
+    (x, y) => x.a.arrSec - y.a.arrSec || x.a.trainId.localeCompare(y.a.trainId),
+  );
+  for (const { a, b, cars } of chainLinks) {
+    const layover = b.depSec - a.arrSec;
+    if (layover >= SHUNT_TO_SIDING_MIN_SEC) {
+      const trackId = booking.placeBerth(
+        a.terminusStationId,
+        a.trainId,
+        cars,
+        a.routing,
+        a.arrSec,
+        b.depSec,
+        { sidingOnly: true },
+      );
+      if (trackId !== undefined) {
+        shuntedLinks.set(a.trainId, {
+          stationId: a.terminusStationId,
+          trackId,
+          from: a.arrSec,
+          to: b.depSec,
+        });
+        continue;
+      }
+    }
+    turnbackLinks.push({ arrivingTrainId: a.trainId, departingTrainId: b.trainId });
+    // Authored intent, for the 折り返し dwell reason and the yard view. The
+    // occupancy model deliberately does not depend on it — see occupancy.ts.
+    const arriving = assignables.get(a.trainId)!.stops;
+    arriving[arriving.length - 1]!.operation = 'turnback';
   }
   booking.placeSweep([...assignables.values()], turnbackLinks);
 
@@ -415,33 +497,45 @@ export function buildOimachiProject(): ProjectDocument {
 
       chain.forEach((node, nodeIndex) => {
         const wait = node.depSec - prevEnd;
-        const needsBerth =
-          wait >= berthAfterSec(prevStation) || (nodeIndex === 0 && outShunted && wait > 0);
-        if (needsBerth) {
+        if (nodeIndex === 0) {
           // The 出庫 is pinned to the road its first train leaves from, so the
           // wait after it needs no berth of its own — it is already booked.
-          legs.push(
-            nodeIndex === 0
-              ? berthOn(
-                  prevStation,
-                  outShunted ? outTrackId : firstTrackId,
-                  runs.out.id,
-                  prevTrainId,
-                  pool.cars,
-                  prevRouting,
-                  prevEnd,
-                  node.depSec,
-                )
-              : berth(
-                  prevStation,
-                  prevTrainId,
-                  pool.cars,
-                  prevRouting,
-                  prevEnd,
-                  node.depSec,
-                  prevTrackId,
-                ),
-          );
+          if (wait >= berthAfterSec(prevStation) || (outShunted && wait > 0)) {
+            legs.push(
+              berthOn(
+                prevStation,
+                outShunted ? outTrackId : firstTrackId,
+                runs.out.id,
+                prevTrainId,
+                pool.cars,
+                prevRouting,
+                prevEnd,
+                node.depSec,
+              ),
+            );
+          }
+        } else {
+          // A 折り返し inside the chain: either the tail track claimed above, or
+          // an in-place reversal, in which case the road is the one the arriving
+          // train is already standing on and the leg only records the fact.
+          const shunt = shuntedLinks.get(prevTrainId);
+          if (shunt !== undefined) {
+            legs.push({
+              kind: 'stable',
+              stationId: shunt.stationId,
+              trackId: shunt.trackId,
+              from: shunt.from,
+              to: shunt.to,
+            });
+          } else if (wait >= STABLE_LEG_MIN_SEC && prevTrackId !== undefined) {
+            legs.push({
+              kind: 'stable',
+              stationId: prevStation,
+              trackId: prevTrackId,
+              from: prevEnd,
+              to: node.depSec,
+            });
+          }
         }
         legs.push({ kind: 'train', trainId: node.trainId });
         prevEnd = node.arrSec;

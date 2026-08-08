@@ -153,7 +153,13 @@ export const turnbackTight: Rule = {
  *
  * A `stable` leg between the two train legs that names the road the formation
  * moved to *is* the model of the move, so it makes the change legitimate and no
- * issue is raised.
+ * issue is raised. So is a `stable` leg on a 引上線 / 留置線 of the same station:
+ * that is the canonical 頭端 turnback — 溝の口 arrives at 2番線 (降車専用), shunts
+ * out to a 引上線 for the layover and comes back into 3番線 (大井町方面) to load.
+ * The plan is not claiming the stock teleported; it is naming the tail track the
+ * two shunt moves run over, which is precisely what the rule asks for. Only the
+ * duration of the two moves is idealised away, and that is the documented v1
+ * model for every shunt, including the one to the departure road itself.
  */
 export const turnbackTrackChanged: Rule = {
   id: 'turnback.trackChanged',
@@ -170,9 +176,16 @@ export const turnbackTrackChanged: Rule = {
       // A modelled berth between the two legs is the move: nothing to report.
       if (p.viaTrackIds.includes(departingTrackId)) continue;
 
-      const shuntable = tracksOfStation(ctx.doc, p.stationId).some(
-        (t) => t.usage === 'stabling' || t.usage === 'depot',
+      const shuntRoads = new Set(
+        tracksOfStation(ctx.doc, p.stationId)
+          .filter((t) => t.usage === 'stabling' || t.usage === 'depot')
+          .map((t) => t.id),
       );
+      // …and so is a berth on a tail track of the same station: platform →
+      // 引上線 → platform is one modelled move, not a teleport.
+      if (p.viaTrackIds.some((id) => shuntRoads.has(id))) continue;
+
+      const shuntable = shuntRoads.size > 0;
       out.push({
         id: issueId('turnback.trackChanged', p.duty.id, p.arriving.id, p.departing.id),
         ruleId: 'turnback.trackChanged',

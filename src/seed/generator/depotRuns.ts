@@ -31,8 +31,19 @@ import { timeRoute, type RouteStop } from './stopTimes';
 import type { DutyNode } from './dutyMatch';
 import type { AssignableTrain, PinnedEnd, TrackBooking } from './trackAssign';
 
-/** Margin between a service train arriving and its 入庫回送 setting off. */
-export const DEPOT_TURN_MARGIN_SEC = 300;
+/**
+ * Margin between a service train arriving and its 入庫回送 setting off — and,
+ * mirrored, between a 出庫回送 arriving and the first service train leaving.
+ *
+ * 240 s is 大井町's own `minTurnbackSec`, the researched figure for reversing in
+ * place at a 頭端式 platform with no tail track, and there is nothing else for
+ * an empty move to do that a service turnback does not: no passengers to clear,
+ * the same walk through the train, the same brake test. Anything longer is a
+ * formation standing on a platform road for no operational reason, and at a
+ * two-road stub that is exactly the margin the next arrival needs — a minute of
+ * padding here is what put a 回送 on the wrong face of the platform at 22:59.
+ */
+export const DEPOT_TURN_MARGIN_SEC = 240;
 /**
  * Step and range of the search that paths an empty move into a gap.
  *
@@ -268,6 +279,7 @@ interface PathRequest {
   holdTerminusUntilSec?: Sec;
   note: string;
   preferStablingAtOrigin: boolean;
+  preferStablingAtTerminus?: boolean;
   pinnedOrigin?: PinnedEnd;
   pinnedTerminus?: PinnedEnd;
 }
@@ -278,6 +290,7 @@ function unpinned(req: PathRequest): PathRequest {
   return {
     ...rest,
     preferStablingAtOrigin: true,
+    preferStablingAtTerminus: true,
     ...(pinnedTerminus === undefined ? {} : { holdTerminusUntilSec: pinnedTerminus.at }),
     ...(pinnedOrigin === undefined ? {} : { holdOriginFromSec: pinnedOrigin.at }),
   };
@@ -291,8 +304,14 @@ function searchPathWithFallback(
     return searchPath(ctx, req);
   }
   // Three tiers, weakest assumption last: reverse on the service train's own
-  // road; failing that, take another road but hold it until the hand-over;
-  // failing that, just find a path and let the duty record the shunt.
+  // road; failing that, take another road — a 引上線 for choice — and hold it
+  // until the hand-over; and failing that, just find a path.
+  //
+  // The third tier is a plan the 構内ダイヤ cannot fully execute: the formation
+  // still has to stand somewhere, the occupancy model holds the arrival road
+  // for it, and the conflict is reported. That is the intended outcome — an
+  // honest 二重使用 error naming the terminal that is over capacity beats a
+  // build that dies, and beats a silent hole in the yard plan.
   try {
     return searchPath(ctx, req);
   } catch (err) {
@@ -327,6 +346,9 @@ function searchPath(
       isPassenger: false,
       preferStablingAtOrigin: req.preferStablingAtOrigin,
       stops,
+      ...(req.preferStablingAtTerminus === undefined
+        ? {}
+        : { preferStablingAtTerminus: req.preferStablingAtTerminus }),
       ...(req.pinnedOrigin === undefined ? {} : { pinnedOrigin: req.pinnedOrigin }),
       ...(req.pinnedTerminus === undefined ? {} : { pinnedTerminus: req.pinnedTerminus }),
       ...(req.holdOriginFromSec === undefined ? {} : { holdOriginFromSec: req.holdOriginFromSec }),

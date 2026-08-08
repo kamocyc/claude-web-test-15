@@ -442,38 +442,58 @@ describe('検査', () => {
 describe('時間帯別の運転本数', () => {
   it('matches the planned trains per hour in each direction', () => {
     const expected: Record<string, { down: number; up: number }> = {
-      早朝: { down: 6, up: 6 },
+      早朝: { down: 8, up: 8 },
       立上り: { down: 8, up: 8 },
+      朝ラッシュ準備: { down: 8, up: 16 },
       朝ラッシュ: { down: 16, up: 16 },
+      逓減準備: { down: 16, up: 12 },
       逓減: { down: 12, up: 12 },
+      日中準備: { down: 12, up: 16 },
       日中: { down: 16, up: 16 },
       夕ラッシュ: { down: 16, up: 16 },
       夜間: { down: 16, up: 16 },
+      深夜準備: { down: 12, up: 8 },
       深夜: { down: 6, up: 6 },
     };
+    expect(report.perBand.map((b) => b.name).sort()).toEqual(Object.keys(expected).sort());
     const bandById = new Map(report.perBand.map((b) => [b.name, b]));
     for (const [name, want] of Object.entries(expected)) {
       const band = bandById.get(name)!;
       const hours = band.down / band.tph;
       expect(band.tph, `${name} 下り`).toBe(want.down);
-      // The 夕ラッシュ 上り 急行 starts at 鷺沼 one cycle ahead of the grid, so
-      // that band's first cycle carries one 上り train fewer. Everything else
-      // is exact.
-      expect(band.up / hours, `${name} 上り`).toBeGreaterThan(want.up - 0.3);
+      // A 鷺沼始発 上り 急行 leaves one cycle ahead of the grid, so a band's
+      // first cycle can carry one 上り train fewer. Everything else is exact.
+      expect(band.up / hours, `${name} 上り`).toBeGreaterThan(want.up - 0.7);
       expect(band.up / hours, `${name} 上り`).toBeLessThanOrEqual(want.up);
     }
   });
 
   /**
    * 大井町 is a stub: every 上り train that arrives has to leave again as a 下り
-   * train, and the terminal can hold two formations. Over a band, therefore,
-   * 上り and 下り counts have to match — an asymmetric peak is not a denser
-   * timetable, it is stock piling up on two dead-end platform roads.
+   * train, and the terminal can hold two formations. A steady band therefore
+   * has to be symmetric — an asymmetric peak is not a denser timetable, it is
+   * stock piling up on two dead-end platform roads.
+   *
+   * The 準備 bands are asymmetric on purpose, and in the direction that puts
+   * the difference at 溝の口 instead: the 上り changes gear a run time before
+   * the 下り does, so 大井町 sees arrivals and departures step together while
+   * 溝の口 — two 引上線, four faces, 鷺沼車庫 eight minutes away — absorbs the
+   * formations entering or leaving service. See `RAMP_LEAD_SEC` in service.ts.
    */
-  it('keeps every band balanced, because 大井町 cannot store the difference', () => {
+  it('keeps every steady band balanced, because 大井町 cannot store the difference', () => {
     for (const band of report.perBand) {
+      if (band.name.endsWith('準備')) {
+        expect(band.up, `${band.name}`).not.toBe(band.down);
+        continue;
+      }
       expect(Math.abs(band.up - band.down), `${band.name}`).toBeLessThanOrEqual(1);
     }
+  });
+
+  it('balances over the whole day: what 大井町 takes in, it sends out', () => {
+    const down = report.perBand.reduce((n, b) => n + b.down, 0);
+    const up = report.perBand.reduce((n, b) => n + b.up, 0);
+    expect(Math.abs(up - down)).toBeLessThanOrEqual(3);
   });
 });
 

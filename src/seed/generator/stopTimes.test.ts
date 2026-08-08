@@ -48,8 +48,8 @@ describe('日中パターン単体 — 15分サイクル', () => {
   });
 
   it('holds the 各停 at 旗の台 until the 急行 has gone, with clearance both sides', () => {
-    const local = result.trains.get('b5-midday:d1:3')!;
-    const express = result.trains.get('b5-midday:d2:3')!;
+    const local = result.trains.get(`${band.id}:d1:3`)!;
+    const express = result.trains.get(`${band.id}:d2:3`)!;
     const at = facts.S.hatanodai;
     const li = local.indexOf.get(at)!;
     const ei = express.indexOf.get(at)!;
@@ -63,8 +63,8 @@ describe('日中パターン単体 — 15分サイクル', () => {
   });
 
   it('extends the wait by lengthening the dwell, not by moving the origin', () => {
-    const local = result.trains.get('b5-midday:d1:3')!;
-    const spec = specs.find((s) => s.key === 'b5-midday:d1:3')!;
+    const local = result.trains.get(`${band.id}:d1:3`)!;
+    const spec = specs.find((s) => s.key === `${band.id}:d1:3`)!;
     expect(local.dep[0]).toBe(spec.departureSec);
     const at = facts.S.hatanodai;
     const i = local.indexOf.get(at)!;
@@ -74,8 +74,8 @@ describe('日中パターン単体 — 15分サイクル', () => {
   });
 
   it('re-propagates downstream: the wait shows up at the terminus too', () => {
-    const waiter = result.trains.get('b5-midday:d1:3')!;
-    const clear = result.trains.get('b5-midday:d4:3')!;
+    const waiter = result.trains.get(`${band.id}:d1:3`)!;
+    const clear = result.trains.get(`${band.id}:d4:3`)!;
     const journey = (t: typeof waiter): number =>
       t.arr[t.route.length - 1]! - t.dep[0]!;
     expect(journey(waiter)).toBeGreaterThan(journey(clear));
@@ -93,7 +93,7 @@ describe('朝ラッシュ — 待避は旗の台', () => {
   const result = buildStopTimes(facts, expandBands([band], [pattern], ids()));
 
   it('stands the 各停 ahead of the 急行 aside at 旗の台', () => {
-    const atHatanodai = result.trains.get('b3-ampeak:u1:2')!;
+    const atHatanodai = result.trains.get(`${band.id}:u1:2`)!;
     expect(atHatanodai.extraDwell.has(facts.S.hatanodai)).toBe(true);
     expect(atHatanodai.overtakenBy.get(facts.S.hatanodai)).toHaveLength(1);
   });
@@ -124,7 +124,7 @@ describe('不正な待避は静かに通さない', () => {
       buildStopTimes(facts, specs);
     } catch (err) {
       expect((err as SeedError).context).toMatchObject({
-        band: 'b5-midday',
+        band: band.id,
         slot: 'd1',
         cycle: 0,
         station: '自由が丘',

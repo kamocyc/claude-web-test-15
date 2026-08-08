@@ -37,13 +37,19 @@
  * overlap the partner's own interval, because the two are one formation.
  *
  * `tryPlace` also enforces a minimum 続行時隔 against every train already
- * placed, at every intermediate station of the 回送's route. That single check
- * does double duty: it keeps the 回送 out of the block behind a service train,
- * and — because a station is only ~60 s from its neighbour, while the check
- * demands a much larger gap at *every* station — it also makes it impossible
- * for a 回送 to slide past a service train in mid-section. Overtaking requires
- * the gap to pass through zero, and it cannot do that between two stations
- * without failing the check at one of them.
+ * placed. It is checked exactly the way `headway.section` checks it — per
+ * (link, direction), on the ENTRY sequence and the EXIT sequence separately —
+ * because a generator that models the constraint differently from the validator
+ * either lets errors through or, as happened here, forbids paths that are
+ * perfectly legal. Lumping every instant at a station into one sequence made a
+ * 回送 terminating at 溝の口 from 梶が谷 wait for the 上り departures towards
+ * 高津, which are on another link entirely; the empty move then arrived a
+ * quarter of an hour early and squatted on a 引上線.
+ *
+ * The per-link form still does the second job the old one did: it makes it
+ * impossible for a 回送 to slide past a service train in mid-section, because
+ * overtaking needs the gap to pass through zero and the entry and exit of the
+ * link it happens in are both checked.
  */
 
 import type { StationId, StationTrackId, TrainId } from '@/domain/ids';
@@ -74,6 +80,12 @@ export interface AssignableTrain {
   isPassenger: boolean;
   /** 入庫回送 leaving 溝の口: berth it on a 引上線 if one is free. */
   preferStablingAtOrigin: boolean;
+  /**
+   * The mirror image, and the reason a 出庫 into 溝の口 does not block a
+   * platform: an empty move that arrives well before the train it hands over to
+   * belongs in a 引上線 for the wait, not on 2番線.
+   */
+  preferStablingAtTerminus?: boolean;
   stops: TrainStop[];
   /** This train's origin shares a road with the train that just terminated. */
   pinnedOrigin?: PinnedEnd;
@@ -121,8 +133,6 @@ interface Event {
   /** Occupation window, margins excluded. */
   occFrom: Sec;
   occTo: Sec;
-  /** Instants this event puts a train on the running line, for 続行時隔. */
-  headwayAt: Array<{ at: Sec; direction: Direction }>;
   mustWait: boolean;
   mustPass: boolean;
   /** Road forced by a 折り返し partner that is already booked. */
@@ -135,18 +145,37 @@ interface Event {
    * can never crowd out a train that actually has to be somewhere.
    */
   wanted?: { from: Sec; to: Sec };
+  /**
+   * The window without the chain-end hold folded in. A hold is how a terminal
+   * with no 引上線 says "the empty move stands on this road": it has to be
+   * booked in the first pass or the 回送 will find the road gone. But a hold
+   * that cannot be had is not a reason to abandon the timetable — the train
+   * still has to stand somewhere — so the event falls back to its bare window
+   * and the hold becomes a preference like any other.
+   */
+  core?: { from: Sec; to: Sec } | undefined;
 }
 
 interface Occupied {
   from: Sec;
   to: Sec;
   trainId: TrainId;
+  /**
+   * Set when part of this booking is only a chain end's *reservation* — road
+   * time the 出庫 or 入庫 would like, on top of the window the train itself
+   * needs. A later train that finds nowhere else to go may take it back, which
+   * is what makes booking the reservation eagerly safe.
+   */
+  bare?: { from: Sec; to: Sec } | undefined;
 }
 
 export class TrackBooking {
   private readonly occupancy = new Map<StationTrackId, Occupied[]>();
-  /** `${stationId}|${direction}` -> sorted line-occupation instants. */
-  private readonly headway = new Map<string, Sec[]>();
+  /**
+   * `${fromStationId}>${toStationId}` — one bucket per link AND direction, each
+   * holding the sorted ENTRY and EXIT instants of the trains already placed.
+   */
+  private readonly traversals = new Map<string, { enter: Sec[]; exit: Sec[] }>();
   /** `${stationId}|${trainId}` for trains that must be on a through track. */
   private mustPass = new Set<string>();
   fallbacks = 0;
@@ -178,6 +207,8 @@ export class TrackBooking {
         }
       }
     }
+
+    for (const train of trains) this.addTraversals(train);
 
     const byId = new Map(trains.map((t) => [t.trainId, t]));
     /** trainId -> the train that takes its formation on at the terminus. */
@@ -216,7 +247,6 @@ export class TrackBooking {
           if (next !== undefined && nextFirst !== undefined && nextDep !== undefined) {
             ev.targets.push({ train: next, stopIndex: 0 });
             ev.occTo = Math.max(ev.occTo, nextDep);
-            ev.headwayAt.push({ at: nextDep, direction: next.direction });
           }
         }
         push(stop.stationId, ev);
@@ -231,10 +261,30 @@ export class TrackBooking {
           a.occFrom - b.occFrom ||
           a.targets[0]!.train.trainId.localeCompare(b.targets[0]!.train.trainId),
       );
-      // Pass 1: every train gets the road it actually needs.
+      // Pass 1: every train gets the road it actually needs — and, where the
+      // road it would have taken anyway can also carry the chain end's
+      // reservation, it takes that in the same breath. Deferring the whole
+      // reservation to pass 2 lost it every time a later train in the sweep
+      // moved into the window, which at 大井町 is how the 出庫 ended up on the
+      // other face of a platform it cannot cross to.
       const placed: Array<{ ev: Event; track: StationTrack }> = [];
       for (const ev of events) {
-        const chosen = this.pick(station.id, ev);
+        const roomy = roomyWindow(ev);
+        let booked = ev;
+        let chosen = roomy === undefined ? undefined : this.pick(station.id, roomy);
+        if (chosen !== undefined && roomy !== undefined) booked = roomy;
+        else chosen = this.pick(station.id, ev);
+        if (chosen === undefined) chosen = this.reclaim(station.id, ev);
+        if (chosen === undefined && ev.core !== undefined) {
+          // The hold does not fit. Book what the train actually needs and let
+          // the empty move ask for the rest in pass 2.
+          ev.wanted = { from: ev.occFrom, to: ev.occTo };
+          ev.occFrom = ev.core.from;
+          ev.occTo = ev.core.to;
+          ev.core = undefined;
+          booked = ev;
+          chosen = this.pick(station.id, ev);
+        }
         if (chosen === undefined) {
           throw new SeedError('番線を割り当てられません', {
             station: station.name,
@@ -242,8 +292,15 @@ export class TrackBooking {
             window: `${ev.occFrom}-${ev.occTo}`,
           });
         }
-        this.commit(station.id, ev, chosen);
-        placed.push({ ev, track: chosen });
+        this.commit(
+          station.id,
+          booked,
+          chosen,
+          booked === ev
+            ? undefined
+            : { from: ev.occFrom - chosen.approachSec, to: ev.occTo + chosen.clearSec },
+        );
+        if (booked === ev) placed.push({ ev, track: chosen });
       }
       // Pass 2: chain ends take the extra road time their empty move needs, if
       // and only if nothing else wants it. A reservation that cannot be had is
@@ -301,6 +358,7 @@ export class TrackBooking {
     routing: Routing,
     from: Sec,
     to: Sec,
+    opts: { sidingOnly?: boolean } = {},
   ): StationTrackId | undefined {
     const tracks = this.facts.tracksOf.get(stationId) ?? [];
     const stationKey = this.facts.keyOf.get(stationId);
@@ -308,8 +366,14 @@ export class TrackBooking {
     const ranked = [...tracks]
       .filter((t) => {
         if (t.maxCars < cars || !t.canTurnBack) return false;
-        if (!inQuad) return true;
         const role = this.facts.trackRole.get(t.id);
+        // `sidingOnly` asks the question the 引上線 exist to answer: is there a
+        // tail track free, so the formation can clear the platform? A platform
+        // face is not an acceptable substitute — the caller falls back to an
+        // in-place reversal instead, which is a different plan, not a worse
+        // berth.
+        if (opts.sidingOnly === true && role !== 'stabling') return false;
+        if (!inQuad) return true;
         // The 溝の口 引上線 lie beyond the 大井町線 faces; a 田園都市線 train
         // cannot reach them without crossing the through roads.
         return role === routing || (role === 'stabling' && routing === 'om');
@@ -335,39 +399,53 @@ export class TrackBooking {
     const events = eventsOf(train, this.mustPass);
     const booked: Array<{ stationId: StationId; ev: Event; track: StationTrack }> = [];
 
+    if (!this.traversalsClear(train, minHeadwaySec)) return false;
+
     for (const ev of events) {
       const stationId = train.stops[ev.targets[0]!.stopIndex]!.stationId;
-      // Both instants matter: the arrival is a link EXIT and the departure a
-      // link ENTRY, and `headway.section` checks the two sequences separately.
-      const clear = ev.headwayAt.every((h) =>
-        this.headwayOk(stationId, h.direction, h.at, minHeadwaySec),
-      );
-      if (!clear) return false;
       const track = this.pick(stationId, ev, booked);
       if (track === undefined) return false;
       booked.push({ stationId, ev, track });
     }
 
     for (const b of booked) this.commit(b.stationId, b.ev, b.track);
+    this.addTraversals(train);
     return true;
   }
 
-  private headwayOk(stationId: StationId, direction: Direction, at: Sec, minSec: number): boolean {
-    const list = this.headway.get(`${stationId}|${direction}`);
-    if (list === undefined) return true;
-    // Linear scan from the binary-search insertion point.
-    let lo = 0;
-    let hi = list.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (list[mid]! < at) lo = mid + 1;
-      else hi = mid;
+  /** The (link, direction) buckets one train's run touches, with its instants. */
+  private static walk(
+    train: AssignableTrain,
+  ): Array<{ key: string; enter: Sec; exit: Sec }> {
+    const out: Array<{ key: string; enter: Sec; exit: Sec }> = [];
+    for (let i = 1; i < train.stops.length; i++) {
+      const prev = train.stops[i - 1]!;
+      const cur = train.stops[i]!;
+      const enter = prev.dep ?? prev.arr;
+      const exit = cur.arr ?? cur.dep;
+      if (enter === undefined || exit === undefined) continue;
+      out.push({ key: `${prev.stationId}>${cur.stationId}`, enter, exit });
     }
-    const before = list[lo - 1];
-    const after = list[lo];
-    if (before !== undefined && at - before < minSec) return false;
-    if (after !== undefined && after - at < minSec) return false;
+    return out;
+  }
+
+  private traversalsClear(train: AssignableTrain, minSec: number): boolean {
+    for (const t of TrackBooking.walk(train)) {
+      const bucket = this.traversals.get(t.key);
+      if (bucket === undefined) continue;
+      if (!gapOk(bucket.enter, t.enter, minSec)) return false;
+      if (!gapOk(bucket.exit, t.exit, minSec)) return false;
+    }
     return true;
+  }
+
+  private addTraversals(train: AssignableTrain): void {
+    for (const t of TrackBooking.walk(train)) {
+      const bucket = this.traversals.get(t.key) ?? { enter: [], exit: [] };
+      insertSorted(bucket.enter, t.enter);
+      insertSorted(bucket.exit, t.exit);
+      this.traversals.set(t.key, bucket);
+    }
   }
 
   private free(
@@ -407,35 +485,61 @@ export class TrackBooking {
     return undefined;
   }
 
-  private commit(stationId: StationId, ev: Event, track: StationTrack): void {
+  /**
+   * Take back a chain end's reservation when a train has nowhere else to stand.
+   *
+   * The reservation is real road time and booking it early is what keeps the
+   * empty move on the right face of a stub platform — but a train that actually
+   * has to be somewhere outranks a formation that would merely like to wait
+   * there, so the reservation shrinks back to the window its own train needs
+   * and the 回送 falls back to whatever the second pass can find.
+   */
+  private reclaim(stationId: StationId, ev: Event): StationTrack | undefined {
+    const tracks = this.facts.tracksOf.get(stationId) ?? [];
+    const candidates =
+      ev.forcedTrackId === undefined
+        ? preferenceOrder(this.facts, stationId, tracks, ev)
+        : tracks.filter((t) => t.id === ev.forcedTrackId && permitted(this.facts, stationId, t, ev));
+    for (const track of candidates) {
+      const from = ev.occFrom - track.approachSec;
+      const to = ev.occTo + track.clearSec;
+      const busy = this.occupancy.get(track.id) ?? [];
+      const shrink: Occupied[] = [];
+      let ok = true;
+      for (const slot of busy) {
+        if (slot.trainId === ev.exemptTrainId) continue;
+        if (!intervalsOverlap(from, to, slot.from, slot.to)) continue;
+        if (slot.bare === undefined || intervalsOverlap(from, to, slot.bare.from, slot.bare.to)) {
+          ok = false;
+          break;
+        }
+        shrink.push(slot);
+      }
+      if (!ok) continue;
+      for (const slot of shrink) {
+        slot.from = slot.bare!.from;
+        slot.to = slot.bare!.to;
+        slot.bare = undefined;
+      }
+      return track;
+    }
+    return undefined;
+  }
+
+  private commit(
+    stationId: StationId,
+    ev: Event,
+    track: StationTrack,
+    bare?: { from: Sec; to: Sec },
+  ): void {
     const busy = this.occupancy.get(track.id) ?? [];
     busy.push({
       from: ev.occFrom - track.approachSec,
       to: ev.occTo + track.clearSec,
       trainId: ev.targets[0]!.train.trainId,
+      ...(bare === undefined ? {} : { bare }),
     });
     this.occupancy.set(track.id, busy);
-
-    // Both the arrival and the departure matter: `headway.section` checks
-    // successive link ENTRY times (= departures) and successive EXIT times
-    // (= arrivals) separately, so a 回送 has to clear both. A fused 折り返し
-    // puts one instant on each direction's sequence, not two on one.
-    const seen = new Set<string>();
-    for (const h of ev.headwayAt) {
-      const key = `${stationId}|${h.direction}`;
-      if (seen.has(`${key}|${h.at}`)) continue;
-      seen.add(`${key}|${h.at}`);
-      const list = this.headway.get(key) ?? [];
-      let lo = 0;
-      let hi = list.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (list[mid]! < h.at) lo = mid + 1;
-        else hi = mid;
-      }
-      list.splice(lo, 0, h.at);
-      this.headway.set(key, list);
-    }
 
     const station = this.facts.stationById.get(stationId);
     for (const target of ev.targets) {
@@ -445,6 +549,43 @@ export class TrackBooking {
       }
     }
   }
+}
+
+/** The event's window with its chain-end reservation folded in, if it has one. */
+function roomyWindow(ev: Event): Event | undefined {
+  if (ev.wanted === undefined) return undefined;
+  return {
+    ...ev,
+    occFrom: Math.min(ev.occFrom, ev.wanted.from),
+    occTo: Math.max(ev.occTo, ev.wanted.to),
+  };
+}
+
+/** Binary-search insertion point, then the two neighbours. */
+function gapOk(sorted: readonly Sec[], at: Sec, minSec: number): boolean {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid]! < at) lo = mid + 1;
+    else hi = mid;
+  }
+  const before = sorted[lo - 1];
+  const after = sorted[lo];
+  if (before !== undefined && at - before < minSec) return false;
+  if (after !== undefined && after - at < minSec) return false;
+  return true;
+}
+
+function insertSorted(sorted: Sec[], at: Sec): void {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid]! < at) lo = mid + 1;
+    else hi = mid;
+  }
+  sorted.splice(lo, 0, at);
 }
 
 /** Sidings first, then depot roads, then — reluctantly — a platform face. */
@@ -475,16 +616,10 @@ function eventOf(
     targets: [{ train, stopIndex }],
     occFrom: holdFrom === undefined ? t0 : Math.min(t0, holdFrom),
     occTo: holdTo === undefined ? t1 : Math.max(t1, holdTo),
+    ...(holdFrom === undefined && holdTo === undefined ? {} : { core: { from: t0, to: t1 } }),
     ...(before === 0 && after === 0
       ? {}
       : { wanted: { from: t0 - before, to: t1 + after } }),
-    headwayAt:
-      t0 === t1
-        ? [{ at: t0, direction: train.direction }]
-        : [
-            { at: t0, direction: train.direction },
-            { at: t1, direction: train.direction },
-          ],
     mustWait: (stop.overtakenBy ?? []).length > 0,
     mustPass: mustPass.has(`${stop.stationId}|${train.trainId}`),
   };
@@ -523,12 +658,16 @@ function permitted(
   return ev.targets.every(({ train, stopIndex }) => {
     const stop = train.stops[stopIndex]!;
     const isOrigin = stopIndex === 0;
+    const isTerminus = stopIndex === train.stops.length - 1;
     if (!track.directions.includes(train.direction)) return false;
     if (track.maxCars < train.cars) return false;
 
     if (stationKey !== undefined && QUAD_SECTION.includes(stationKey)) {
       const stablingOk =
-        role === 'stabling' && !train.isPassenger && train.preferStablingAtOrigin && isOrigin;
+        role === 'stabling' &&
+        !train.isPassenger &&
+        ((train.preferStablingAtOrigin && isOrigin) ||
+          (train.preferStablingAtTerminus === true && isTerminus));
       if (!stablingOk && role !== train.routing) return false;
     } else if (stationKey === 'futakotamagawa') {
       // 大井町線 trains use the 大井町線 faces even when they are about to
@@ -557,11 +696,15 @@ function preferenceOrder(
   const station = facts.stationById.get(stationId)!;
   const primary = ev.targets[0]!;
   const isOrigin = primary.stopIndex === 0;
+  const isTerminus = primary.stopIndex === primary.train.stops.length - 1;
   const allowed = tracks.filter((track) => permitted(facts, stationId, track, ev));
 
   const score = (track: StationTrack): number => {
     const role = facts.trackRole.get(track.id);
-    if (primary.train.preferStablingAtOrigin && isOrigin && role === 'stabling') return 0;
+    if (role === 'stabling' || role === 'depot') {
+      if (primary.train.preferStablingAtOrigin && isOrigin) return 0;
+      if (primary.train.preferStablingAtTerminus === true && isTerminus) return 0;
+    }
     if (track.id === station.defaultTrackId[primary.train.direction]) return 1;
     return 2;
   };
