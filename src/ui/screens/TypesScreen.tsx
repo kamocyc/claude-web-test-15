@@ -10,13 +10,15 @@ import { useMemo, useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
-import type { StationId, TrainTypeId } from '@/domain/ids';
+import type { PerfProfileId, StationId, TrainTypeId } from '@/domain/ids';
 import type { Direction, PerfProfile, StopKind, StopPattern, TrainType } from '@/domain/model';
+import { findDependants } from '@/domain/integrity';
 import { orderedStations } from '@/domain/project';
 import { entityList } from '@/domain/units';
 import { newId } from '@/store/idPool';
 import { Card, Field } from '../components/Field';
 import { useDispatch, useDoc } from '../hooks';
+import { clearing, numberOrUndefined } from '../patch';
 
 import styles from './Editor.module.css';
 
@@ -120,6 +122,7 @@ export function TypesScreen() {
                 <th>略称</th>
                 <th>色</th>
                 <th>旅客</th>
+                <th>性能</th>
                 <th>順序</th>
                 <th />
               </tr>
@@ -127,7 +130,7 @@ export function TypesScreen() {
             <tbody>
               {types.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className={styles.empty}>
+                  <td colSpan={7} className={styles.empty}>
                     種別がありません
                   </td>
                 </tr>
@@ -190,6 +193,27 @@ export function TypesScreen() {
                       }
                     />
                   </td>
+                  <td>
+                    <select
+                      data-testid={TID.trainTypeProfileSelect(type.id)}
+                      value={type.perfProfileId}
+                      aria-label={`${type.name} の性能`}
+                      onChange={(e) =>
+                        dispatch({
+                          type: 'trainType/update',
+                          id: type.id,
+                          patch: { perfProfileId: e.currentTarget.value as PerfProfileId },
+                        })
+                      }
+                    >
+                      {profiles.length === 0 ? <option value="">(性能なし)</option> : null}
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                   <td className={styles.num}>{type.sortOrder}</td>
                   <td>
                     <button
@@ -209,6 +233,8 @@ export function TypesScreen() {
         <PatternForm types={types} stations={stations} />
       </div>
 
+      <PerfProfileEditor />
+
       <Card title="停車パターン">
         {patterns.length === 0 || stations.length === 0 ? (
           <p className={styles.empty}>停車パターンを追加すると表が現れます</p>
@@ -219,7 +245,21 @@ export function TypesScreen() {
                 <tr>
                   <th>駅</th>
                   {patterns.map((p) => (
-                    <th key={p.id}>{p.name}</th>
+                    <th key={p.id}>
+                      <input
+                        className={styles.medium}
+                        data-testid={TID.patternNameCell(p.id)}
+                        value={p.name}
+                        aria-label={`${p.name} の名称`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'stopPattern/update',
+                            id: p.id,
+                            patch: { name: e.currentTarget.value },
+                          })
+                        }
+                      />
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -248,6 +288,30 @@ export function TypesScreen() {
                           >
                             {CELL_LABEL[value]}
                           </button>
+                          {value === 'stop' ? (
+                            <input
+                              className={styles.narrow}
+                              data-testid={TID.patternDwellCell(pattern.id, station.id)}
+                              value={pattern.dwellOverrideSec?.[station.id] ?? ''}
+                              inputMode="numeric"
+                              placeholder="停車秒"
+                              aria-label={`${pattern.name} / ${station.name} の停車時分`}
+                              onChange={(e) => {
+                                const seconds = numberOrUndefined(e.currentTarget.value);
+                                const map = { ...(pattern.dwellOverrideSec ?? {}) };
+                                if (seconds === undefined || seconds <= 0) delete map[station.id];
+                                else map[station.id] = seconds;
+                                dispatch({
+                                  type: 'stopPattern/update',
+                                  id: pattern.id,
+                                  patch:
+                                    Object.keys(map).length === 0
+                                      ? clearing<StopPattern>('dwellOverrideSec')
+                                      : { dwellOverrideSec: map },
+                                });
+                              }}
+                            />
+                          ) : null}
                         </td>
                       );
                     })}
@@ -273,6 +337,162 @@ export function TypesScreen() {
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * 性能 — accel/decel/max speed. Until now a profile could only ever be
+ * auto-created as 標準性能 by whichever editor needed one first, which made the
+ * run-time table's 性能 column a constant.
+ */
+function PerfProfileEditor() {
+  const doc = useDoc();
+  const dispatch = useDispatch();
+  const profiles = useMemo(() => entityList(doc.perfProfiles), [doc]);
+  const [name, setName] = useState('');
+
+  const addProfile = (): void => {
+    const trimmed = name.trim();
+    const profile: PerfProfile = {
+      id: newId<'PerfProfile'>(ID_PREFIX.perfProfile),
+      name: trimmed === '' ? `性能${profiles.length + 1}` : trimmed,
+      accelKmhps: 3.0,
+      decelKmhps: 3.5,
+      maxSpeedKmh: 110,
+    };
+    dispatch({ type: 'perfProfile/add', profile });
+    setName('');
+  };
+
+  return (
+    <Card title="性能">
+      <div className={styles.form}>
+        <Field label="名称">
+          <input
+            className={styles.medium}
+            data-testid={TID.perfProfileNameInput}
+            value={name}
+            onChange={(e) => setName(e.currentTarget.value)}
+          />
+        </Field>
+        <button type="button" data-testid={TID.perfProfileAdd} onClick={addProfile}>
+          性能を追加
+        </button>
+      </div>
+
+      <table className={styles.table} data-testid={TID.perfProfileList}>
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>加速度(km/h/s)</th>
+            <th>減速度(km/h/s)</th>
+            <th>最高速度(km/h)</th>
+            <th>使用種別</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {profiles.length === 0 ? (
+            <tr>
+              <td colSpan={6} className={styles.empty}>
+                性能がありません
+              </td>
+            </tr>
+          ) : null}
+          {profiles.map((profile) => {
+            const users = findDependants(doc, 'perfProfile', profile.id);
+            return (
+              <tr
+                key={profile.id}
+                data-testid={TID.perfProfileRow(profile.id)}
+                data-profile-id={profile.id}
+              >
+                <td>
+                  <input
+                    className={styles.medium}
+                    value={profile.name}
+                    aria-label={`${profile.name} の名称`}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'perfProfile/update',
+                        id: profile.id,
+                        patch: { name: e.currentTarget.value },
+                      })
+                    }
+                  />
+                </td>
+                <td className={styles.num}>
+                  <input
+                    className={styles.narrow}
+                    data-testid={TID.perfProfileAccel(profile.id)}
+                    value={profile.accelKmhps}
+                    inputMode="decimal"
+                    aria-label={`${profile.name} の加速度`}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'perfProfile/update',
+                        id: profile.id,
+                        patch: { accelKmhps: Number(e.currentTarget.value) || 0 },
+                      })
+                    }
+                  />
+                </td>
+                <td className={styles.num}>
+                  <input
+                    className={styles.narrow}
+                    data-testid={TID.perfProfileDecel(profile.id)}
+                    value={profile.decelKmhps}
+                    inputMode="decimal"
+                    aria-label={`${profile.name} の減速度`}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'perfProfile/update',
+                        id: profile.id,
+                        patch: { decelKmhps: Number(e.currentTarget.value) || 0 },
+                      })
+                    }
+                  />
+                </td>
+                <td className={styles.num}>
+                  <input
+                    className={styles.narrow}
+                    data-testid={TID.perfProfileMaxSpeed(profile.id)}
+                    value={profile.maxSpeedKmh}
+                    inputMode="numeric"
+                    aria-label={`${profile.name} の最高速度`}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'perfProfile/update',
+                        id: profile.id,
+                        patch: { maxSpeedKmh: Number(e.currentTarget.value) || 0 },
+                      })
+                    }
+                  />
+                </td>
+                <td>{users.length === 0 ? '—' : users.map((u) => u.label).join(', ')}</td>
+                <td>
+                  <button
+                    type="button"
+                    className={styles.danger}
+                    data-testid={TID.perfProfileRemove(profile.id)}
+                    disabled={users.length > 0}
+                    title={
+                      users.length > 0 ? '使用中の性能は削除できません' : '削除'
+                    }
+                    onClick={() => dispatch({ type: 'perfProfile/remove', id: profile.id })}
+                  >
+                    削除
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className={styles.hint}>
+        所要時間は「駅・線路」画面の駅間表で、種別が参照する性能ごとに入力します。
+      </p>
+    </Card>
   );
 }
 

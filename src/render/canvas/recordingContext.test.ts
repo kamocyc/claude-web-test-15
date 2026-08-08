@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createRecordingContext, linePath, roundRectPath } from './recordingContext';
 import { contrastText, desaturate, FALLBACK_THEME, getTheme, withAlpha } from './theme';
-import { approxTextWidth, drawLabel, textCacheSize } from './textCache';
+import { approxTextWidth, drawLabel, measuredTextWidth, textCacheSize } from './textCache';
 
 describe('recording context', () => {
   it('records calls in order with their arguments', () => {

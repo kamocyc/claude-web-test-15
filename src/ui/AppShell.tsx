@@ -34,6 +34,7 @@ import { DutiesScreen } from './screens/DutiesScreen';
 import { FormationsScreen } from './screens/FormationsScreen';
 import { InspectionsScreen } from './screens/InspectionsScreen';
 import { LineScreen } from './screens/LineScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
 import { StationsScreen } from './screens/StationsScreen';
 import { TimetableScreen } from './screens/TimetableScreen';
 import { TypesScreen } from './screens/TypesScreen';
@@ -176,6 +177,8 @@ function Screen({ route }: { route: string }) {
       return <TypesScreen />;
     case ROUTES.inspections:
       return <InspectionsScreen />;
+    case ROUTES.settings:
+      return <SettingsScreen />;
     case ROUTES.timetable:
     default:
       return <TimetableScreen />;

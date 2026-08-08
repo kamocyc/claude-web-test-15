@@ -67,6 +67,7 @@ const labelPlacer = new StationLabelPlacer();
 const markerSlots = new MarkerSlots();
 const placeArgs: PlaceTrainArgs = { km: 0, direction: 'down' };
 const placement: TrainPlacement = { x: 0, lane: 0 };
+const NO_FORMATIONS: readonly string[] = [];
 
 export interface LineDrawEnv {
   layout: LineLayout;
@@ -167,11 +168,12 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
   }
 
   // -- station blocks -------------------------------------------------------
-  const bandFloor = laneStackTop(env) - 7;
-  const rows = Math.max(
-    1,
-    Math.min(2, Math.floor((laneStackTop(env) - 2) / LABEL_ROW_PITCH)),
-  );
+  // Names hang off the top of the lane stack. How many rows they get depends
+  // on how much band is actually on screen, so a short canvas degrades to one
+  // row and drops more names rather than writing over the rails.
+  const stackTop = laneStackTop(env);
+  const bandFloor = stackTop - 7;
+  const rows = Math.max(1, Math.min(2, Math.floor((stackTop - 2) / LABEL_ROW_PITCH)));
   planStationLabels(env, rows);
 
   for (let i = 0; i < layout.stations.length; i++) {
@@ -521,7 +523,7 @@ function drawDepots(ctx: DrawContext, env: LineDynamicEnv): void {
     ctx.fill();
     ctx.stroke();
 
-    const ids = snapshot.depotOccupancy.get(depot.depotId) ?? [];
+    const ids = snapshot.depotOccupancy.get(depot.depotId) ?? NO_FORMATIONS;
     const nameY = box.y + 3;
     const detailY = nameY + 12;
     drawLabel(ctx, depot.label, box.x + 6, nameY, DEPOT_FONT, theme.text, {

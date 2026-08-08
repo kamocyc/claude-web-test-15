@@ -19,24 +19,29 @@ import {
   type InspectionRule,
 } from '@/domain/model';
 import { entityList } from '@/domain/units';
-import { computeInspectionStatus } from '@/engine';
+import { computeInspectionStatus, type InspectionState } from '@/engine';
 import { newId } from '@/store/idPool';
 import { useUiStore } from '@/store/uiStore';
 import { Card, Field } from '../components/Field';
 import { useDispatch, useDoc } from '../hooks';
+import { clearing, numberOrUndefined } from '../patch';
 
 import styles from './Editor.module.css';
 
-/**
- * A patch that clears one optional field.
- *
- * `Partial<T>` under `exactOptionalPropertyTypes` cannot express "set this key
- * to undefined", but the reducer treats an explicit undefined as a delete —
- * which is the only way to turn a km-based rule back into a days-only one.
- */
-function clearing<T>(key: keyof T & string): Partial<T> {
-  return { [key]: undefined } as unknown as Partial<T>;
-}
+/** The engine's enum is English; the screen is not. */
+const STATE_LABEL: Record<InspectionState, string> = {
+  ok: '良好',
+  dueSoon: '期限間近',
+  overdue: '期限超過',
+  unknown: '未実施',
+};
+
+const STATE_CLASS: Record<InspectionState, string> = {
+  ok: styles.badgeOk ?? '',
+  dueSoon: styles.badgeDueSoon ?? '',
+  overdue: styles.badgeOverdue ?? '',
+  unknown: styles.badgeUnknown ?? '',
+};
 
 export function InspectionsScreen() {
   const doc = useDoc();
@@ -289,7 +294,14 @@ export function InspectionsScreen() {
                 >
                   <td>{doc.formations.byId[status.formationId]?.code ?? status.formationId}</td>
                   <td>{status.label}</td>
-                  <td>{status.state}</td>
+                  <td>
+                    <span
+                      className={`${styles.badge} ${STATE_CLASS[status.state]}`}
+                      data-state={status.state}
+                    >
+                      {STATE_LABEL[status.state]}
+                    </span>
+                  </td>
                   <td>{status.lastDate ?? '—'}</td>
                   <td>{status.dueDate ?? '—'}</td>
                   <td className={styles.num}>{status.daysRemaining ?? '—'}</td>

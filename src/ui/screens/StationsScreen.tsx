@@ -125,6 +125,57 @@ export function StationsScreen() {
 
   return (
     <div className={styles.screen}>
+      <Card title="路線">
+        <div className={styles.form} data-testid={TID.lineEditor}>
+          <Field label="路線名">
+            <input
+              className={styles.wide}
+              data-testid={TID.lineNameInput}
+              value={doc.line.name}
+              onChange={(e) =>
+                dispatch({ type: 'line/update', patch: { name: e.currentTarget.value } })
+              }
+            />
+          </Field>
+          <Field label="下り方向">
+            <input
+              className={styles.medium}
+              data-testid={TID.lineDownLabelInput}
+              value={doc.line.downDirectionLabel}
+              onChange={(e) =>
+                dispatch({
+                  type: 'line/update',
+                  patch: { downDirectionLabel: e.currentTarget.value },
+                })
+              }
+            />
+          </Field>
+          <Field label="上り方向">
+            <input
+              className={styles.medium}
+              data-testid={TID.lineUpLabelInput}
+              value={doc.line.upDirectionLabel}
+              onChange={(e) =>
+                dispatch({
+                  type: 'line/update',
+                  patch: { upDirectionLabel: e.currentTarget.value },
+                })
+              }
+            />
+          </Field>
+          <Field label="路線色">
+            <input
+              type="color"
+              data-testid={TID.lineColorInput}
+              value={doc.line.color}
+              onChange={(e) =>
+                dispatch({ type: 'line/update', patch: { color: e.currentTarget.value } })
+              }
+            />
+          </Field>
+        </div>
+      </Card>
+
       <div className={styles.columns}>
         <Card title="駅">
           <div className={styles.form}>
@@ -318,7 +369,9 @@ export function StationsScreen() {
               <thead>
                 <tr>
                   <th>区間</th>
-                  <th>距離</th>
+                  <th>距離(km)</th>
+                  <th>線路数</th>
+                  <th>最高速度</th>
                   <th>性能</th>
                   <th>基準運転時分(秒)</th>
                   <th>起動(秒)</th>
@@ -329,7 +382,7 @@ export function StationsScreen() {
               <tbody>
                 {links.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className={styles.empty}>
+                    <td colSpan={9} className={styles.empty}>
                       駅を 2 つ以上追加すると駅間が作られます
                     </td>
                   </tr>
@@ -345,7 +398,56 @@ export function StationsScreen() {
                         {doc.stations.byId[link.fromStationId]?.name ?? '?'} —{' '}
                         {doc.stations.byId[link.toStationId]?.name ?? '?'}
                       </td>
-                      <td className={styles.num}>{formatKm(link.distance, 2)}</td>
+                      <td className={styles.num}>
+                        <input
+                          className={styles.narrow}
+                          data-testid={TID.linkDistanceInput}
+                          value={metersToKm(link.distance)}
+                          inputMode="decimal"
+                          aria-label="駅間距離"
+                          title={formatKm(link.distance, 2)}
+                          onChange={(e) =>
+                            dispatch({
+                              type: 'link/update',
+                              id: link.id,
+                              patch: { distance: kmToMeters(Number(e.currentTarget.value) || 0) },
+                            })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <select
+                          data-testid={TID.linkTrackCountSelect}
+                          value={link.trackCount}
+                          aria-label="線路数"
+                          onChange={(e) =>
+                            dispatch({
+                              type: 'link/update',
+                              id: link.id,
+                              patch: { trackCount: Number(e.currentTarget.value) === 1 ? 1 : 2 },
+                            })
+                          }
+                        >
+                          <option value={1}>単線</option>
+                          <option value={2}>複線</option>
+                        </select>
+                      </td>
+                      <td className={styles.num}>
+                        <input
+                          className={styles.narrow}
+                          data-testid={TID.linkMaxSpeedInput}
+                          value={link.maxSpeedKmh}
+                          inputMode="numeric"
+                          aria-label="最高速度"
+                          onChange={(e) =>
+                            dispatch({
+                              type: 'link/update',
+                              id: link.id,
+                              patch: { maxSpeedKmh: Number(e.currentTarget.value) || 0 },
+                            })
+                          }
+                        />
+                      </td>
                       <td>{profile?.name ?? '—'}</td>
                       <td className={styles.num}>
                         <input
@@ -432,14 +534,42 @@ export function StationsScreen() {
         <DepotEditor stations={stations} depots={depots} />
       </div>
 
-      <Card title="構内ダイヤ">
+      <Card
+        title="構内ダイヤ"
+        actions={
+          <select
+            data-testid={TID.yardChartStationSelect}
+            aria-label="構内ダイヤの対象駅"
+            value={currentStationId}
+            onChange={(e) => {
+              setPickedStationId(e.currentTarget.value);
+              select({ kind: 'station', stationId: e.currentTarget.value as StationId });
+            }}
+          >
+            {allStations.length === 0 ? <option value="">(駅なし)</option> : null}
+            {allStations.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        }
+      >
         {currentStation === undefined ? (
           <p className={styles.empty}>駅を選択してください</p>
         ) : (
-          <StationYardChart
-            stationId={currentStation.id}
-            onSelect={(ref) => select(ref)}
-          />
+          <>
+            <StationYardChart
+              stationId={currentStation.id}
+              onSelect={(ref) => select(ref)}
+              onReassignTrack={(trainId, stopIndex, trackId) =>
+                dispatch({ type: 'train/setStopTrack', trainId, stopIndex, trackId })
+              }
+            />
+            <p className={styles.hint}>
+              バーを他の番線レーンへドラッグすると番線が変わります。バーを選んで ↑ ↓ でも動かせます。
+            </p>
+          </>
         )}
       </Card>
     </div>

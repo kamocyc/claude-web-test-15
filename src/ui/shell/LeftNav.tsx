@@ -13,6 +13,7 @@ export const ROUTE_LABEL: Record<RouteName, string> = {
   [ROUTES.stations]: '駅・線路',
   [ROUTES.types]: '種別・パターン',
   [ROUTES.inspections]: '検査',
+  [ROUTES.settings]: '設定',
 };
 
 const ORDER: RouteName[] = [
@@ -24,6 +25,7 @@ const ORDER: RouteName[] = [
   ROUTES.stations,
   ROUTES.types,
   ROUTES.inspections,
+  ROUTES.settings,
 ];
 
 export function LeftNav() {
