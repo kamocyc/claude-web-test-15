@@ -470,6 +470,34 @@ describe('時間帯別の運転本数', () => {
   });
 
   /**
+   * The peak/off-peak contrast is the point of the band ladder, so pin both
+   * halves of it: the density AND the mix inside a cycle. 16 本/時 is one 急行
+   * to three 各停; 12 本/時 is one 急行 to two, because the 1 : 3 version of it
+   * needs a 1200 s cycle that 大井町 cannot be handed — see the header of
+   * `service.ts` for the whole argument.
+   */
+  it('runs 急行1:各停3 in the peaks and 急行1:各停2 off-peak, both directions', () => {
+    const mix: Record<string, [number, number]> = {
+      朝ラッシュ: [1, 3],
+      夕ラッシュ: [1, 3],
+      日中: [1, 2],
+      夜間: [1, 2],
+      夜間後半: [1, 2],
+    };
+    for (const [name, [wantExpress, wantLocal]] of Object.entries(mix)) {
+      const band = report.perBand.find((b) => b.name === name)!;
+      for (const direction of ['down', 'up'] as const) {
+        const inBand = service.filter(
+          (t) => t.origin?.bandId === band.bandId && t.direction === direction,
+        );
+        const express = inBand.filter((t) => t.typeId === EXPRESS.id).length;
+        const local = inBand.length - express;
+        expect(local / express, `${name} ${direction}`).toBe(wantLocal / wantExpress);
+      }
+    }
+  });
+
+  /**
    * 大井町 is a stub: every 上り train that arrives has to leave again as a 下り
    * train, and the terminal can hold two formations. A steady band therefore
    * has to be symmetric — an asymmetric peak is not a denser timetable, it is
