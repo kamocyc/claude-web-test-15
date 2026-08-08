@@ -1,0 +1,48 @@
+{
+  "name": "railway-operation-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "時刻表に基づく鉄道運行シミュレータ — ダイヤ・車両運用・入出庫・構内ダイヤ・検査周期",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "seed": "vite-node src/seed/build.ts",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.6",
+    "clsx": "^2.1.1",
+    "idb": "^8.0.3",
+    "immer": "^11.1.16",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "^9.39.5",
+    "fast-check": "^4.4.0",
+    "jsdom": "^30.0.1",
+    "prettier": "^3.6.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.47.0",
+    "@types/node": "^24.10.1",
+    "vite": "^8.2.1",
+    "vite-node": "^6.0.0",
+    "vitest": "^4.1.10"
+  }
+}
