@@ -80,6 +80,8 @@ const BAND_DEFS: readonly BandDef[] = [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown' },
       { id: 'd2', offsetSec: 10 * M, patternKey: 'blueDownSaginuma' },
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp' },
+      // Leaves 鷺沼 8 minutes into the cycle and is on the 溝の口 clock at
+      // +15:40, comfortably clear of the next 緑各停.
       { id: 'u2', offsetSec: 8 * M, patternKey: 'blueUpSaginuma' },
     ],
   },
@@ -92,7 +94,7 @@ const BAND_DEFS: readonly BandDef[] = [
     cycleSec: 15 * M,
     slots: [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 240, patternKey: 'expressDown' },
+      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
       { id: 'u2', offsetSec: 300, patternKey: 'expressUp' },
     ],
@@ -105,14 +107,21 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 9 * H,
     cycleSec: 9 * M,
     slots: [
+      // 下り is the counter-peak, and it is *capacity limited by the layout*:
+      // with only one 待避線 per direction at 旗の台 an 急行 can stand aside
+      // exactly one 各停 per cycle, and an 急行 gains ~350 s on a 緑各停 over
+      // the 12.4 km, so any 各停 departing less than ~440 s ahead of it also
+      // has to be overtaken. Three trains in a 9-minute cycle would need two
+      // 待避 in the 下り, which the line simply cannot do. Two it is —
+      // 13.3 本/時, which is what the real counter-peak looks like.
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 240, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: 420, patternKey: 'blueDown' },
-      // Peak direction. Both 各停 are overtaken by the same 急行 — one early at
-      // 上野毛, one late at 旗の台.
+      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
+      // 上り is the peak, and it has TWO 待避 points — 旗の台 and the
+      // 上り-only loop at 上野毛 — so it can carry the full 20 本/時 with both
+      // 各停 standing aside for the same 急行.
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u3') },
       { id: 'u2', offsetSec: 180, patternKey: 'blueUp', ...waitFor('kaminoge', 'u3') },
-      { id: 'u3', offsetSec: 330, patternKey: 'expressUp' },
+      { id: 'u3', offsetSec: 360, patternKey: 'expressUp' },
     ],
   },
   // -------------------------------------------------------------- 逓減
@@ -124,7 +133,7 @@ const BAND_DEFS: readonly BandDef[] = [
     cycleSec: 15 * M,
     slots: [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 240, patternKey: 'expressDown' },
+      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
       { id: 'd3', offsetSec: 480, patternKey: 'blueDown' },
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
       { id: 'u2', offsetSec: 300, patternKey: 'expressUp' },
@@ -140,7 +149,7 @@ const BAND_DEFS: readonly BandDef[] = [
     cycleSec: 15 * M,
     slots: [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 240, patternKey: 'expressDown' },
+      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
       { id: 'd3', offsetSec: 450, patternKey: 'blueDown' },
       { id: 'd4', offsetSec: 660, patternKey: 'greenDown' },
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
@@ -155,20 +164,25 @@ const BAND_DEFS: readonly BandDef[] = [
     name: '夕ラッシュ',
     fromSec: 16 * H,
     toSec: 20 * H,
-    cycleSec: 12 * M,
+    cycleSec: 15 * M,
     slots: [
+      // Peak direction is 下り — and 下り has only the one 待避線, so the
+      // evening peak cannot be denser than the daytime 16 本/時 (see the note
+      // on 朝ラッシュ). What tightens is the *product*, not the interval: the
+      // 急行 runs through onto the 田園都市線, seven cars deep.
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 240, patternKey: 'expressDownSaginuma', note: THROUGH_NOTE },
-      { id: 'd3', offsetSec: 420, patternKey: 'blueDown' },
-      { id: 'd4', offsetSec: 600, patternKey: 'greenDown' },
-      // u2 starts at 鷺沼, 490 s further out than the 溝の口 slots, so its offset
-      // is shifted back by one cycle (720 − 490 = 230 … i.e. 530) to put it on
-      // the 溝の口 clock at +300. The 各停 it passes at 旗の台 is therefore the
-      // NEXT cycle's u1, which is what `cycleDelta: -1` says on that slot.
+      { id: 'd2', offsetSec: 250, patternKey: 'expressDownSaginuma', note: THROUGH_NOTE },
+      { id: 'd3', offsetSec: 450, patternKey: 'blueDown' },
+      { id: 'd4', offsetSec: 660, patternKey: 'greenDown' },
+      // u2 starts at 鷺沼, 490 s further out than the 溝の口 slots, so its
+      // offset is shifted round by one cycle (900 − 490 + 300 = 710) to put it
+      // on the 溝の口 clock at +300. The 各停 it stands aside at 旗の台 is
+      // therefore the NEXT cycle's u1 — which is what `cycleDelta: -1` says
+      // when read from that 各停's side.
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2', -1) },
-      { id: 'u2', offsetSec: 530, patternKey: 'expressUpSaginuma', note: THROUGH_NOTE },
-      { id: 'u3', offsetSec: 480, patternKey: 'greenUp' },
-      { id: 'u4', offsetSec: 620, patternKey: 'blueUp' },
+      { id: 'u2', offsetSec: 710, patternKey: 'expressUpSaginuma', note: THROUGH_NOTE },
+      { id: 'u3', offsetSec: 480, patternKey: 'blueUp' },
+      { id: 'u4', offsetSec: 690, patternKey: 'greenUp' },
     ],
   },
   // -------------------------------------------------------------- 夜間
@@ -180,7 +194,7 @@ const BAND_DEFS: readonly BandDef[] = [
     cycleSec: 15 * M,
     slots: [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 240, patternKey: 'expressDown' },
+      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
       { id: 'd3', offsetSec: 450, patternKey: 'blueDown' },
       { id: 'd4', offsetSec: 660, patternKey: 'greenDown' },
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },

@@ -38,8 +38,15 @@ import { SeedError } from '../errors';
 import { OVERTAKE_STATIONS, type Facts } from '../oimachi/facts';
 import { specKey, type TrainSpec } from './expand';
 
-export const CLEARANCE_ARR_SEC = 45;
-export const CLEARANCE_DEP_SEC = 90;
+/**
+ * Both clearances are set above the 90 s link headway on purpose. `headway.
+ * section` compares successive link ENTRY times and successive link EXIT times
+ * separately, and at a 待避 station the waiting train's arrival and the passing
+ * train's arrival are two exits of the same link — so an arrival clearance
+ * below the headway would be a headway violation dressed up as an overtake.
+ */
+export const CLEARANCE_ARR_SEC = 95;
+export const CLEARANCE_DEP_SEC = 95;
 export const MAX_OVERTAKE_WAIT_SEC = 600;
 export const GRAIN_SEC = 5;
 const MAX_FIXPOINT_PASSES = 6;
