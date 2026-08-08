@@ -1,0 +1,57 @@
+.tray {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.trayItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 4px;
+  border-bottom: 1px solid var(--bg-panel-2);
+}
+
+.trayLabel {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  min-width: 110px;
+  text-align: left;
+}
+
+.trayTime {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 120px;
+}
+
+.choiceList {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: calc(100% - 2px);
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 320px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+
+.gantt {
+  display: block;
+}

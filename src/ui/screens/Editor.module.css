@@ -1,0 +1,220 @@
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  min-height: 0;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.cardTitle {
+  font-weight: 600;
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-end;
+  margin-bottom: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.field input,
+.field select {
+  min-width: 0;
+}
+
+.narrow {
+  width: 74px;
+}
+
+.medium {
+  width: 120px;
+}
+
+.wide {
+  width: 180px;
+}
+
+.checkField {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.table {
+  width: 100%;
+  font-size: 12px;
+}
+
+.tableWrap {
+  overflow: auto;
+  max-height: 46vh;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 1px 6px;
+  border-bottom: 1px solid var(--bg-panel-2);
+  white-space: nowrap;
+}
+
+.table tbody tr:hover {
+  background: var(--bg-panel-2);
+}
+
+.selectedRow {
+  background: var(--bg-panel-2);
+  outline: 1px solid var(--accent-dim);
+}
+
+.num {
+  font-family: var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  color: var(--text-faint);
+  padding: 6px 2px;
+}
+
+.hint {
+  color: var(--text-faint);
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+.danger {
+  color: var(--error);
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.chipOn {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.chipOff {
+  opacity: 0.5;
+}
+
+.badge {
+  display: inline-block;
+  min-width: 62px;
+  text-align: center;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.badgeOk {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.badgeDueSoon {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.badgeOverdue {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.badgeUnknown {
+  color: var(--text-faint);
+}
+
+.canvasHost {
+  flex: 1 1 auto;
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+}
+
+.canvasHost > :global(div) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.swatch {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  display: inline-block;
+}
