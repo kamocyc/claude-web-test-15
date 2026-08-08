@@ -1,19 +1,23 @@
 /**
- * The weekday service plan: twelve time bands, each with one repeating cycle,
- * all of them on the same 900-second grid.
+ * The weekday service plan: thirteen time bands, each with one repeating cycle.
  *
- *   05:00–06:30 早朝       8本/時   緑各停 + 急行
- *   06:30–07:00 立上り     8本/時
- *   07:00–07:30 朝ラッシュ準備 下り8 / 上り16   上りが先に立ち上がる
- *   07:30–08:30 朝ラッシュ 16本/時
- *   08:30–09:00 逓減準備   下り16 / 上り12
- *   09:00–09:30 逓減       12本/時
- *   09:30–10:00 日中準備   下り12 / 上り16
- *   10:00–16:00 日中       16本/時  急行1+各停3
- *   16:00–20:00 夕ラッシュ 16本/時
- *   20:00–22:30 夜間       16本/時
- *   22:30–23:00 深夜準備   下り12 / 上り8
- *   23:00–24:30 深夜       6本/時   20分周期、終列車
+ *   05:00–06:30 早朝           8本/時   15分周期  緑各停 + 急行
+ *   06:30–07:00 立上り         8本/時   15分周期
+ *   07:00–07:30 朝ラッシュ準備 下り8 / 上り16      上りが先に立ち上がる
+ *   07:30–08:30 朝ラッシュ    16本/時   15分周期  急行1+各停3
+ *   08:30–09:00 日中準備      下り16 / 上り12
+ *   09:00–15:00 日中          12本/時   15分周期  急行1+各停2
+ *   15:00–15:30 夕ラッシュ準備 下り12 / 上り16
+ *   15:30–19:30 夕ラッシュ    16本/時   15分周期  急行1+各停3
+ *   19:30–20:00 夜間準備      下り16 / 上り12
+ *   20:00–22:00 夜間          12本/時   15分周期  急行1+各停2
+ *   22:00–22:30 夜間後半      12本/時   15分周期  夜間の続き（境界を残すためだけ）
+ *   22:30–23:00 深夜準備      下り12 / 上り8
+ *   23:00–24:30 深夜           6本/時   20分周期、終列車
+ *
+ * ラッシュ 16本/時 とオフピーク 12本/時 のコントラストが時間帯構造の主眼。
+ * 16本/時 は線区の上限そのもので、その理由は下の **1.** に書いてある。
+ * オフピークが 急行1:各停2 に留まる理由は「一つのグリッド」節に書いてある。
  *
  * ===========================================================================
  * Three structural findings that shaped this file — all of them consequences
@@ -44,15 +48,10 @@
  * See `RAMP_LEAD_SEC`. That is what the 準備 bands are.
  *
  * ===========================================================================
- * The 15-minute grid
+ * One grid — and why 12 本/時 cannot be run at 急行1 : 各停3
  * ===========================================================================
  *
- * Every band except 深夜 uses the SAME 900-second cycle and the same slot
- * offsets, and every band boundary falls on a multiple of 900 s from 05:00.
- * Bands differ only in which slots they populate. That is what keeps the
- * transitions clean: a band never has to re-phase, so no train from the
- * outgoing pattern can arrive inside the incoming one's headway, and no
- * arrival is stranded at a terminal because the next departure moved.
+ * Every band except 深夜 sits on the same 900-second grid:
  *
  *   下り  d1 青 +0:00 (旗の台で待避)   d2 急 +4:10   d3 緑 +7:20   d4 緑 +10:40
  *   上り  u1 緑 +3:30 (旗の台で待避)   u2 急 +8:30   u3 青 +12:20  u4 緑 +10:10
@@ -60,7 +59,61 @@
  * The 急行 leaves four to five minutes behind the 各停 it will overtake — far
  * enough that it is still 100 s behind on arrival at 旗の台, which is where the
  * only 待避線 in that direction is. Offsets are all multiples of 10 s, so every
- * computed time lands on the 5-second grain with no rounding.
+ * computed time lands on the 5-second grain with no rounding. 16 本/時 fills all
+ * four slots; 12 本/時 drops d4 / u4, which is 急行1 : 各停2; 8 本/時 keeps only
+ * the 待避 pair, d1/d2 and u1/u2.
+ *
+ * **The off-peak would rather be 急行1 : 各停3, and cannot be.** Four trains in
+ * 1200 s is 12 本/時 at the nominal mix, and 大井町 can take it on its own terms:
+ * 頭端式1面2線, two dead-end roads, a turnback holding one road from
+ * `arrival − 30 s` to `departure + 20 s`, four turnbacks a cycle, so each road
+ * turns two of them — one every 600 s — and every layover has to land in
+ * [300, 550] s (300 s being the preferred 折り返し the roster books, 550 =
+ * 600 − 50 s of approach and clear). The 15-minute grid sits at 305–365 s
+ * against its own bound of 400 s, so the shape is nothing unusual. Grids that
+ * satisfy the 550 s bound, the 旗の台 overtake geometry AND the 90 s headways
+ * where a 1200 s cycle abuts the 900 s one do exist: a sweep of the whole
+ * eight-offset space found 78 359 of them.
+ *
+ * What none of them survives is the **pool split at the band edges**. 青各停 and
+ * 緑各停 are not interchangeable stock: at 溝の口 they stand on different islands
+ * — the 田園都市線 faces 1・4 against the 大井町線 faces 2・3 — so a formation
+ * that arrived as one cannot leave as the other, and the roster carries them as
+ * two pools (`DutyNode.routing`). A 1200 s cycle at 急行1 : 各停3 runs
+ * 3 急 / 3 青 / 6 緑 an hour. The 30-minute 準備 bands cannot hold a 1200 s cycle
+ * at all (1800 / 1200 = 1.5), so their 12 本/時 side is three slots of the
+ * 900 s grid: 4 / 4 / 4 an hour. The 緑 pool would therefore step 6 → 4 → 8
+ * across every off-peak boundary.
+ *
+ * And 大井町 keeps receiving the *outgoing* pattern for a full run time after
+ * the boundary — that is the whole point of `RAMP_LEAD_SEC` — so between 15:00
+ * and 15:29 it would take in 6 緑/h and send out 4: one 緑 formation more than
+ * the plan has any use for. Two dead-end roads cannot park it, because the
+ * 夕ラッシュ already books 1535 of the 1800 road-seconds in every cycle. So it
+ * has to run 入庫 to 鷺沼 — a full-line empty move leaving 大井町 at about 15:30,
+ * straight into four hours of 16 本/時. There is no path for it; `depotRuns`
+ * searches ±100 minutes and gives up. 09:00 is the mirror image and costs a
+ * 出庫 instead; 20:00 and 22:00 repeat both. Measured across those 78 359 grids
+ * — and with the 溝の口 layover bound stretched to the longer cycle, which is
+ * a concession in their favour — the best still needed 56 duty chains against
+ * this plan's 34, which is 112 empty moves against 68, and every one of them
+ * put at least one 入庫 into a peak.
+ *
+ * Restoring 1 : 3 off-peak needs one of the two things this line has not got: a
+ * 準備 band a whole hour long (which would move four formations' worth of
+ * imbalance onto 大井町's two roads — worse than the problem it solves, and it
+ * would make the 上り lead the 下り by an hour), or a formation that can change
+ * between the 青 and 緑 routes at 溝の口. The nominal mix therefore survives
+ * where it can actually be worked: at 16 本/時, in both peaks.
+ *
+ * **A corollary worth keeping: a 1200-second band must begin and end on the
+ * hour.** 900 and 1200 share a period of 3600 s, so the hour is the only instant
+ * at which both rhythms complete together. 早朝 used to run a 20-minute cycle
+ * from 05:00 to 06:30 — four and a half cycles — and the truncated one stranded
+ * arrivals at 大井町 that the incoming pattern had no departure for. Several
+ * formations went 入庫 there within twenty minutes while others came 出庫 into
+ * the same two roads, and a terminal with no siding cannot survive that. 深夜 is
+ * the one 1200 s band left, and it is safe only because nothing follows it.
  *
  * Everything in this file is a reconstruction. The band boundaries, the cycle
  * lengths and the mix inside a cycle follow the researched pattern; the exact
@@ -273,65 +326,86 @@ const BAND_DEFS: readonly BandDef[] = [
     cycleSec: 15 * M,
     slots: [...DOWN_FULL, ...UP_FULL],
   },
-  // ------------------------------------------------------------ 逓減準備
+  // ------------------------------------------------------------ 日中準備
+  // The 上り drops to 12 first; the 下り follows at 09:00. Its 12 本/時 runs on
+  // the 15-minute grid (1 : 2), because a 1200 s cycle does not fit in 1800 s.
   {
-    id: 'b5-taper-lead',
-    name: '逓減準備',
+    id: 'b5-midday-lead',
+    name: '日中準備',
     fromSec: 8 * H + 30 * M,
     toSec: 9 * H,
     cycleSec: 15 * M,
     slots: [...DOWN_FULL, ...UP_TAPER],
   },
-  // -------------------------------------------------------------- 逓減
+  // -------------------------------------------------------------- 日中
+  // 12 本/時, on the same 900-second grid as everything else: one 急行 and two
+  // 各停 per cycle. The nominal 急行1 : 各停3 would need a 1200 s cycle, and the
+  // header explains at length why 大井町 cannot be handed one — the 緑 pool
+  // steps 6 → 4 → 8 本/時 across the 準備 bands and the surplus formation has to
+  // deadhead home through the peak.
   {
-    id: 'b6-taper',
-    name: '逓減',
+    id: 'b6-midday',
+    name: '日中',
     fromSec: 9 * H,
-    toSec: 9 * H + 30 * M,
+    toSec: 15 * H,
     cycleSec: 15 * M,
     slots: [...DOWN_TAPER, ...UP_TAPER],
   },
-  // ------------------------------------------------------------ 日中準備
+  // ------------------------------------------------------------ 夕ラッシュ準備
   {
-    id: 'b7-midday-lead',
-    name: '日中準備',
-    fromSec: 9 * H + 30 * M,
-    toSec: 10 * H,
+    id: 'b7-pmpeak-lead',
+    name: '夕ラッシュ準備',
+    fromSec: 15 * H,
+    toSec: 15 * H + 30 * M,
     cycleSec: 15 * M,
     slots: [...DOWN_TAPER, ...UP_FULL],
   },
-  // -------------------------------------------------------------- 日中
+  // -------------------------------------------------------------- 夕ラッシュ
   {
-    id: 'b8-midday',
-    name: '日中',
-    fromSec: 10 * H,
-    toSec: 16 * H,
+    id: 'b8-pmpeak',
+    name: '夕ラッシュ',
+    fromSec: 15 * H + 30 * M,
+    toSec: 19 * H + 30 * M,
     cycleSec: 15 * M,
     slots: [...DOWN_FULL, ...UP_FULL],
   },
-  // -------------------------------------------------------------- 夕ラッシュ
+  // ------------------------------------------------------------ 夜間準備
   {
-    id: 'b9-pmpeak',
-    name: '夕ラッシュ',
-    fromSec: 16 * H,
+    id: 'b9-evening-lead',
+    name: '夜間準備',
+    fromSec: 19 * H + 30 * M,
     toSec: 20 * H,
     cycleSec: 15 * M,
-    slots: [...DOWN_FULL, ...UP_FULL],
+    slots: [...DOWN_FULL, ...UP_TAPER],
   },
   // -------------------------------------------------------------- 夜間
   {
     id: 'b10-evening',
     name: '夜間',
     fromSec: 20 * H,
+    toSec: 22 * H,
+    cycleSec: 15 * M,
+    slots: [...DOWN_TAPER, ...UP_TAPER],
+  },
+  // ------------------------------------------------------------ 夜間後半
+  // No change in service level and no change in pattern: 夜間 and 夜間後半 are
+  // the same twelve trains an hour. The split is kept because 22:00 is where
+  // the evening would have handed a 20-minute cycle back to the 15-minute one,
+  // and because the band boundary is the natural place to change the service
+  // if this reconstruction is ever given a real evening taper.
+  {
+    id: 'b11-evening-late',
+    name: '夜間後半',
+    fromSec: 22 * H,
     toSec: 22 * H + 30 * M,
     cycleSec: 15 * M,
-    slots: [...DOWN_FULL, ...UP_FULL],
+    slots: [...DOWN_TAPER, ...UP_TAPER],
   },
   // ------------------------------------------------------------ 深夜準備
   // The mirror image of the morning: the 上り winds down first, so the surplus
   // stock piles up at 溝の口 — 引上線 and 鷺沼 — instead of at 大井町.
   {
-    id: 'b11-latenight-lead',
+    id: 'b12-latenight-lead',
     name: '深夜準備',
     fromSec: 22 * H + 30 * M,
     toSec: 23 * H,
@@ -339,15 +413,27 @@ const BAND_DEFS: readonly BandDef[] = [
     slots: [...DOWN_TAPER, ...UP_NIGHT],
   },
   // -------------------------------------------------------------- 深夜
+  // A 20-minute cycle that does NOT end on the hour, which the grid rule
+  // otherwise forbids. It is safe only because this is the last band: there is
+  // no following pattern for a truncated cycle to strand an arrival into, and
+  // whatever is left over simply goes 入庫. Do not copy this shape inland.
   {
-    id: 'b12-latenight',
+    id: 'b13-latenight',
     name: '深夜',
     fromSec: 23 * H,
     toSec: 24 * H + 30 * M, // 24:30 — deliberately NOT wrapped past midnight
     cycleSec: 20 * M,
+    // The 23:00 下り is the 青 that works through to 鷺沼, and that order is not
+    // cosmetic: a formation cannot change between the 青 and 緑 routes (see
+    // `DutyNode.routing`), so the first 深夜 下り has to be the kind of stock
+    // that is actually standing at 大井町 at 23:00. The last 各停 to arrive
+    // before it is the 青 off the 22:27 上り, at 22:54; the last 緑 gets in at
+    // 22:58:55, 65 s before the departure and well short of the 折り返し. With
+    // the 緑 first, that departure needs a 出庫 while the 青 is still on the
+    // other road — three formations, two roads, and `track.doubleOccupancy`.
     slots: [
-      { id: 'd1', offsetSec: 0, patternKey: 'greenDown' },
-      { id: 'd2', offsetSec: 10 * M, patternKey: 'blueDownSaginuma' },
+      { id: 'd1', offsetSec: 0, patternKey: 'blueDownSaginuma' },
+      { id: 'd2', offsetSec: 10 * M, patternKey: 'greenDown' },
       { id: 'u1', offsetSec: 525, patternKey: 'greenUp' },
       { id: 'u2', offsetSec: 1045, patternKey: 'blueUp' },
     ],

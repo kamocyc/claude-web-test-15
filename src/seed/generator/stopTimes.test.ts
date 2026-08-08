@@ -36,10 +36,10 @@ describe('日中パターン単体 — 15分サイクル', () => {
   const specs = expandBands([band], [pattern], ids());
   const result = buildStopTimes(facts, specs);
 
-  it('emits four trains per direction per cycle, 16 本/時', () => {
+  it('emits three trains per direction per cycle, 12 本/時', () => {
     const cycle0 = specs.filter((s) => s.cycleIndex === 0);
-    expect(cycle0.filter((s) => s.direction === 'down')).toHaveLength(4);
-    expect(cycle0.filter((s) => s.direction === 'up')).toHaveLength(4);
+    expect(cycle0.filter((s) => s.direction === 'down')).toHaveLength(3);
+    expect(cycle0.filter((s) => s.direction === 'up')).toHaveLength(3);
   });
 
   it('converges without hunting: one productive pass, one confirming pass', () => {
@@ -75,7 +75,7 @@ describe('日中パターン単体 — 15分サイクル', () => {
 
   it('re-propagates downstream: the wait shows up at the terminus too', () => {
     const waiter = result.trains.get(`${band.id}:d1:3`)!;
-    const clear = result.trains.get(`${band.id}:d4:3`)!;
+    const clear = result.trains.get(`${band.id}:d3:3`)!;
     const journey = (t: typeof waiter): number =>
       t.arr[t.route.length - 1]! - t.dep[0]!;
     expect(journey(waiter)).toBeGreaterThan(journey(clear));
