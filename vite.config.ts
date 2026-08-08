@@ -5,7 +5,10 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      '@e2e': fileURLToPath(new URL('./e2e', import.meta.url)),
+    },
   },
   build: { outDir: 'dist', sourcemap: true },
   test: {
