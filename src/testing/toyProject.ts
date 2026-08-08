@@ -347,7 +347,8 @@ export function toyProject(): ProjectDocument {
     dayTypeIds: [TOY.dayType],
     stops: [
       stop(TOY.stationA, TOY.a1, undefined, 8 * H + 3 * M),
-      { stationId: TOY.stationB, trackId: TOY.b1, arr: 8 * H + 4 * M + 10, dep: 8 * H + 4 * M + 10, kind: 'pass' },
+      // 80s from A: base 70 + 10s start penalty (the origin is a stand).
+      { stationId: TOY.stationB, trackId: TOY.b1, arr: 8 * H + 4 * M + 20, dep: 8 * H + 4 * M + 20, kind: 'pass' },
       { stationId: TOY.stationC, trackId: TOY.c1, arr: 8 * H + 6 * M, dep: 8 * H + 6 * M, kind: 'pass' },
       stop(TOY.stationD, TOY.d2, 8 * H + 7 * M + 30, undefined),
     ],
