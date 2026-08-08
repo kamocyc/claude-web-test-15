@@ -10,7 +10,7 @@ import { useMemo, useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
-import type { StationId, StopPatternId, TrainTypeId } from '@/domain/ids';
+import type { StationId, TrainTypeId } from '@/domain/ids';
 import type { Direction, PerfProfile, StopKind, StopPattern, TrainType } from '@/domain/model';
 import { orderedStations } from '@/domain/project';
 import { entityList } from '@/domain/units';

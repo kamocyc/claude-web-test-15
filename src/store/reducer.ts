@@ -8,16 +8,8 @@
 
 import { current } from 'immer';
 
-import { ID_PREFIX, asId } from '@/domain/ids';
-import type {
-  AssignmentId,
-  DayTypeId,
-  DutyId,
-  LinkId,
-  StationId,
-  StationTrackId,
-  TrainId,
-} from '@/domain/ids';
+import { ID_PREFIX } from '@/domain/ids';
+import type { DayTypeId, StationId, StationTrackId, TrainId } from '@/domain/ids';
 import type {
   Assignment,
   Direction,

@@ -10,7 +10,7 @@ import { useMemo, useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
-import type { DepotId, FormationId, InspectionRuleId } from '@/domain/ids';
+import type { DepotId, FormationId } from '@/domain/ids';
 import {
   INSPECTION_KINDS,
   INSPECTION_KIND_LABEL,

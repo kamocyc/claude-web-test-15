@@ -7,7 +7,7 @@ import { useMemo, useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
-import type { DepotId, PerfProfileId, StationId, StationTrackId } from '@/domain/ids';
+import type { PerfProfileId, StationId } from '@/domain/ids';
 import type {
   Depot,
   Direction,

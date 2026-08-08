@@ -13,7 +13,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
-import type { StationTrackId, StopPatternId, TrainId, TrainTypeId } from '@/domain/ids';
+import type { StationTrackId, TrainId } from '@/domain/ids';
 import type { Train, TrainStop } from '@/domain/model';
 import {
   allStationsInKmOrder,
