@@ -56,6 +56,7 @@ export function InspectionsScreen() {
   const records = useMemo(() => entityList(doc.inspectionRecords), [doc]);
   const formations = useMemo(() => entityList(doc.formations), [doc]);
   const depots = useMemo(() => entityList(doc.depots), [doc]);
+  const seriesList = useMemo(() => entityList(doc.formationSeries), [doc]);
   const statuses = useMemo(() => computeInspectionStatus(doc, asOf), [doc, asOf]);
 
   const [kind, setKind] = useState<InspectionKind>('train');
@@ -161,15 +162,19 @@ export function InspectionsScreen() {
               <th>種類</th>
               <th>名称</th>
               <th>周期(日)</th>
+              <th>予告(日)</th>
               <th>周期(km)</th>
+              <th>予告(km)</th>
               <th>離脱(日)</th>
+              <th>対象形式</th>
+              <th>施行庫</th>
               <th />
             </tr>
           </thead>
           <tbody>
             {rules.length === 0 ? (
               <tr>
-                <td colSpan={6} className={styles.empty}>
+                <td colSpan={10} className={styles.empty}>
                   検査規程がありません
                 </td>
               </tr>
@@ -213,6 +218,26 @@ export function InspectionsScreen() {
                 <td className={styles.num}>
                   <input
                     className={styles.narrow}
+                    data-testid={TID.inspectionRuleWarnDays(rule.id)}
+                    value={rule.warnBeforeDays ?? ''}
+                    inputMode="numeric"
+                    aria-label={`${rule.name} の日数予告`}
+                    onChange={(e) => {
+                      const v = numberOrUndefined(e.currentTarget.value);
+                      dispatch({
+                        type: 'inspectionRule/update',
+                        id: rule.id,
+                        patch:
+                          v !== undefined && v > 0
+                            ? { warnBeforeDays: v }
+                            : clearing<InspectionRule>('warnBeforeDays'),
+                      });
+                    }}
+                  />
+                </td>
+                <td className={styles.num}>
+                  <input
+                    className={styles.narrow}
                     value={rule.intervalKm ?? ''}
                     inputMode="numeric"
                     aria-label={`${rule.name} の距離周期`}
@@ -229,7 +254,114 @@ export function InspectionsScreen() {
                     }}
                   />
                 </td>
-                <td className={styles.num}>{rule.outOfServiceDays}</td>
+                <td className={styles.num}>
+                  <input
+                    className={styles.narrow}
+                    data-testid={TID.inspectionRuleWarnKm(rule.id)}
+                    value={rule.warnBeforeKm ?? ''}
+                    inputMode="numeric"
+                    aria-label={`${rule.name} の距離予告`}
+                    onChange={(e) => {
+                      const v = numberOrUndefined(e.currentTarget.value);
+                      dispatch({
+                        type: 'inspectionRule/update',
+                        id: rule.id,
+                        patch:
+                          v !== undefined && v > 0
+                            ? { warnBeforeKm: v }
+                            : clearing<InspectionRule>('warnBeforeKm'),
+                      });
+                    }}
+                  />
+                </td>
+                <td className={styles.num}>
+                  <input
+                    className={styles.narrow}
+                    data-testid={TID.inspectionRuleOutOfService(rule.id)}
+                    value={rule.outOfServiceDays}
+                    inputMode="numeric"
+                    aria-label={`${rule.name} の離脱日数`}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'inspectionRule/update',
+                        id: rule.id,
+                        patch: { outOfServiceDays: Number(e.currentTarget.value) || 0 },
+                      })
+                    }
+                  />
+                </td>
+                <td>
+                  <select
+                    data-testid={TID.inspectionRuleAppliesTo(rule.id)}
+                    value={rule.appliesTo === 'all' ? 'all' : 'some'}
+                    aria-label={`${rule.name} の対象`}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'inspectionRule/update',
+                        id: rule.id,
+                        patch: {
+                          appliesTo:
+                            e.currentTarget.value === 'all'
+                              ? 'all'
+                              : { seriesIds: seriesList.map((s) => s.id) },
+                        },
+                      })
+                    }
+                  >
+                    <option value="all">全形式</option>
+                    <option value="some">形式を指定</option>
+                  </select>
+                  {rule.appliesTo === 'all'
+                    ? null
+                    : seriesList.map((s) => {
+                        const chosen = rule.appliesTo !== 'all' && rule.appliesTo.seriesIds.includes(s.id);
+                        return (
+                          <label key={s.id} className={styles.checkField}>
+                            <input
+                              type="checkbox"
+                              data-testid={TID.inspectionRuleSeries(rule.id, s.id)}
+                              checked={chosen}
+                              onChange={(e) => {
+                                const current =
+                                  rule.appliesTo === 'all' ? [] : rule.appliesTo.seriesIds;
+                                const next = e.currentTarget.checked
+                                  ? [...current.filter((id) => id !== s.id), s.id]
+                                  : current.filter((id) => id !== s.id);
+                                dispatch({
+                                  type: 'inspectionRule/update',
+                                  id: rule.id,
+                                  patch: { appliesTo: { seriesIds: next } },
+                                });
+                              }}
+                            />
+                            <span>{s.name}</span>
+                          </label>
+                        );
+                      })}
+                </td>
+                <td>
+                  {depots.length === 0 ? '—' : null}
+                  {depots.map((depot) => (
+                    <label key={depot.id} className={styles.checkField}>
+                      <input
+                        type="checkbox"
+                        data-testid={TID.inspectionRuleDepot(rule.id, depot.id)}
+                        checked={rule.depotIds.includes(depot.id)}
+                        onChange={(e) => {
+                          const next = e.currentTarget.checked
+                            ? [...rule.depotIds.filter((id) => id !== depot.id), depot.id]
+                            : rule.depotIds.filter((id) => id !== depot.id);
+                          dispatch({
+                            type: 'inspectionRule/update',
+                            id: rule.id,
+                            patch: { depotIds: next },
+                          });
+                        }}
+                      />
+                      <span>{depot.name}</span>
+                    </label>
+                  ))}
+                </td>
                 <td>
                   <button
                     type="button"
@@ -350,7 +482,25 @@ export function InspectionsScreen() {
             {formationRecords.map((record) => (
               <tr key={record.id}>
                 <td>{doc.inspectionRules.byId[record.ruleId]?.name ?? record.kind}</td>
-                <td>{record.status === 'completed' ? '実施済' : '予定'}</td>
+                <td>
+                  <select
+                    data-testid={TID.inspectionRecordStatus(record.id)}
+                    value={record.status}
+                    aria-label="検査の状態"
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'inspectionRecord/update',
+                        id: record.id,
+                        patch: {
+                          status: e.currentTarget.value as InspectionRecord['status'],
+                        },
+                      })
+                    }
+                  >
+                    <option value="completed">実施済</option>
+                    <option value="planned">予定</option>
+                  </select>
+                </td>
                 <td>
                   <input
                     type="date"
@@ -379,8 +529,47 @@ export function InspectionsScreen() {
                     }
                   />
                 </td>
-                <td className={styles.num}>{record.odometerKmAt ?? '—'}</td>
-                <td>{doc.depots.byId[record.depotId]?.name ?? '—'}</td>
+                <td className={styles.num}>
+                  <input
+                    className={styles.narrow}
+                    data-testid={TID.inspectionRecordOdometer(record.id)}
+                    value={record.odometerKmAt ?? ''}
+                    inputMode="numeric"
+                    aria-label="検査時の走行距離"
+                    onChange={(e) => {
+                      const value = numberOrUndefined(e.currentTarget.value);
+                      dispatch({
+                        type: 'inspectionRecord/update',
+                        id: record.id,
+                        patch:
+                          value === undefined
+                            ? clearing<InspectionRecord>('odometerKmAt')
+                            : { odometerKmAt: value },
+                      });
+                    }}
+                  />
+                </td>
+                <td>
+                  <select
+                    data-testid={TID.inspectionRecordDepot(record.id)}
+                    value={record.depotId}
+                    aria-label="施行庫"
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'inspectionRecord/update',
+                        id: record.id,
+                        patch: { depotId: e.currentTarget.value as DepotId },
+                      })
+                    }
+                  >
+                    {depots.length === 0 ? <option value="">(車庫なし)</option> : null}
+                    {depots.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
                 <td>
                   <button
                     type="button"

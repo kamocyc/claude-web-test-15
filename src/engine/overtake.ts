@@ -168,6 +168,30 @@ function skipsStopsOf(b: TrainTimeline, a: TrainTimeline): boolean {
   return b.events.some((e) => e.kind === 'pass' && aStops.has(e.stationId));
 }
 
+/**
+ * 緩急接続 is a transfer from a slower product to a faster one. Two conditions
+ * have to hold and both were missing:
+ *
+ * - **The target must stop.** A 通過 cannot be boarded. 上野毛 is the case that
+ *   made this visible: the 急行 runs through, so a 各停 standing there has
+ *   nothing to change to however long it waits.
+ * - **The target must actually be faster.** 各停 → 各停 of the same product is
+ *   not a connection, it is two trains at the same platform. `remainingStops`
+ *   is the operative measure of "faster from here": fewer calls left means an
+ *   earlier arrival at every station both of them serve.
+ */
+function isTransferTarget(
+  stationId: StationId,
+  from: StationVisit,
+  to: StationVisit,
+): boolean {
+  if (to.event.kind !== 'stop') return false;
+  const leftForTo = remainingStops(to.tl, stationId);
+  if (leftForTo === 0) return false;
+  if (leftForTo < remainingStops(from.tl, stationId)) return true;
+  return to.tl.typeId !== from.tl.typeId && skipsStopsOf(to.tl, from.tl);
+}
+
 export function detectConnections(
   doc: ProjectDocument,
   timelines: Map<TrainId, TrainTimeline>,
@@ -193,47 +217,80 @@ export function detectConnections(
     const transferSec = depB - arrA;
     const stop = from.tl.train.stops[from.event.stopIndex];
     seen.add(key);
-    out.push({
+    const event: ConnectionEvent = {
       stationId,
       direction: from.tl.direction,
       fromTrainId: from.tl.trainId,
       toTrainId: to.tl.trainId,
       transferSec,
       declared: (stop?.connectsTo ?? []).includes(to.tl.trainId),
-      viable:
+      viable: false,
+    };
+    if (to.event.kind !== 'stop') {
+      event.blockedReason = 'targetDoesNotStop';
+    } else if (!isTransferTarget(stationId, from, to)) {
+      event.blockedReason = 'targetNotFaster';
+    } else {
+      event.viable =
         transferSec >= cfg.connectionMinTransferSec &&
-        transferSec <= cfg.connectionMaxWaitSec,
-    });
+        transferSec <= cfg.connectionMaxWaitSec;
+    }
+    out.push(event);
   };
 
+  /**
+   * A transfer is only interesting inside the wait window, so the candidate
+   * search is bounded by it instead of scanning every later departure at the
+   * station. Sorting the visits by departure once per station turns the pair
+   * search from O(visits²) into O(visits · candidates-in-window); at ~500
+   * visits per station that is ~45k pair evaluations down to a few hundred.
+   *
+   * Declared connections are added separately below, so bounding the window
+   * here cannot turn a declared-but-too-slow transfer into a phantom
+   * "the two trains were never both here" report.
+   */
   for (const [stationId, visits] of byStation) {
     const station = doc.stations.byId[stationId];
     if (!station?.isConnectionPoint) continue;
+
+    const byDeparture = [...visits].sort(
+      (a, b) =>
+        (a.event.dep ?? a.event.at) - (b.event.dep ?? b.event.at) ||
+        a.tl.trainId.localeCompare(b.tl.trainId),
+    );
+    const departures = byDeparture.map((v) => v.event.dep ?? v.event.at);
 
     for (const from of visits) {
       if (from.event.kind !== 'stop') continue;
       if (!isPassenger(from.tl)) continue;
       const arrA = from.event.arr ?? from.event.at;
+      const until = arrA + cfg.connectionMaxWaitSec;
 
-      for (const to of visits) {
+      // First candidate departing at or after this train arrives.
+      let lo = 0;
+      let hi = departures.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (departures[mid]! < arrA) lo = mid + 1;
+        else hi = mid;
+      }
+
+      for (let i = lo; i < byDeparture.length && departures[i]! <= until; i++) {
+        const to = byDeparture[i]!;
         if (to.tl.trainId === from.tl.trainId) continue;
         if (to.tl.direction !== from.tl.direction) continue;
         if (!isPassenger(to.tl)) continue;
-        const depB = to.event.dep ?? to.event.at;
-        if (depB < arrA) continue;
-        // B must still be going somewhere beyond this station.
-        if (remainingStops(to.tl, stationId) === 0) continue;
-        const faster =
-          remainingStops(to.tl, stationId) < remainingStops(from.tl, stationId) ||
-          (to.tl.typeId !== from.tl.typeId && skipsStopsOf(to.tl, from.tl));
-        if (!faster) continue;
+        if (!isTransferTarget(stationId, from, to)) continue;
         add(stationId, from, to);
       }
     }
   }
 
-  // Every overtake at a connection point is, by construction, a candidate
-  // transfer: the local is standing there while the express goes through.
+  // An overtake at a connection point is a candidate transfer *when the train
+  // doing the passing stops*: the local is standing there and the express
+  // pulls in alongside. Where the express runs straight through — 上野毛, where
+  // it does not call at all — the 待避 is a spacing move and no passenger can
+  // use it, which is exactly what `isTransferTarget` refuses.
   for (const ot of overtakes) {
     const station = doc.stations.byId[ot.stationId];
     if (!station?.isConnectionPoint) continue;
@@ -243,7 +300,23 @@ export function detectConnections(
     const to = visits.find((v) => v.tl.trainId === ot.passingTrainId);
     if (!from || !to) continue;
     if (!isPassenger(from.tl) || !isPassenger(to.tl)) continue;
+    if (!isTransferTarget(ot.stationId, from, to)) continue;
     add(ot.stationId, from, to);
+  }
+
+  // Declared transfers are always evaluated, in or out of the window: it is
+  // `connection.declaredFails`' job to say whether a declaration holds, and it
+  // needs the measured `transferSec` to say *why* it does not.
+  for (const [stationId, visits] of byStation) {
+    const byTrain = new Map(visits.map((v) => [v.tl.trainId, v]));
+    for (const from of visits) {
+      const stop = from.tl.train.stops[from.event.stopIndex];
+      for (const toTrainId of stop?.connectsTo ?? []) {
+        const to = byTrain.get(toTrainId);
+        if (to === undefined) continue;
+        add(stationId, from, to);
+      }
+    }
   }
 
   out.sort(
