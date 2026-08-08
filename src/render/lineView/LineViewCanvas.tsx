@@ -24,6 +24,7 @@ import {
   clampCamera,
   createCamera,
   fitXToBounds,
+  fitYToBounds,
   type Camera2D,
   type ScaleLimits,
   type Viewport,
@@ -47,13 +48,23 @@ import {
 import { computeLineLayout, LANE_HEIGHT, type LineLayout } from './layout';
 import { LineViewShadow } from './LineViewShadow';
 
-/** Only x zooms freely; lane height is clamped to a legible band. */
+/**
+ * Only x zooms freely; lane height is clamped to a legible band.
+ *
+ * The floor is the height of a marker (26 px) plus air. Below that the boxes
+ * would touch and the view stops meaning anything, so it is better to run out
+ * of lanes and let the user scroll than to render a smear.
+ */
 const LIMITS: ScaleLimits = {
   minScaleX: 0.004,
   maxScaleX: 4,
-  minScaleY: 14,
-  maxScaleY: 48,
+  minScaleY: 30,
+  maxScaleY: 54,
 };
+
+/** Breathing room around the fitted line, CSS pixels. */
+const FIT_PAD_X = 40;
+const FIT_PAD_Y = 6;
 
 const EMPTY_BOUNDS: WorldBounds = { minX: 0, maxX: 1000, minY: 0, maxY: 2 };
 
@@ -113,8 +124,20 @@ export function LineViewCanvas(props: LineViewProps) {
       if (!currentLayout || size.width === 0 || size.height === 0) return false;
 
       if (!fitted.current) {
+        // Both axes are fitted, with different padding and different limits:
+        // x is a free zoom over metres, y is a lane pitch that has to stay in
+        // a band a marker can be read at. `bounds` already includes the
+        // station-name band and the bottom gutter, so fitting y fills the
+        // canvas instead of leaving the lanes huddled at the top.
+        const fitX = fitXToBounds(
+          cameraRef.current,
+          currentLayout.bounds,
+          viewportRef.current,
+          FIT_PAD_X,
+          LIMITS,
+        );
         cameraRef.current = clampCamera(
-          fitXToBounds(cameraRef.current, currentLayout.bounds, viewportRef.current, 40, LIMITS),
+          fitYToBounds(fitX, currentLayout.bounds, viewportRef.current, FIT_PAD_Y, LIMITS),
           currentLayout.bounds,
           viewportRef.current,
           24,
@@ -259,6 +282,7 @@ export function LineViewCanvas(props: LineViewProps) {
         doc={shadowScene?.doc}
         snapshot={shadowScene?.snapshot}
         showDeadhead={showDeadhead}
+        t={shadowScene?.t}
       />
     </div>
   );

@@ -7,6 +7,7 @@ import {
   crisp,
   fitToBounds,
   fitXToBounds,
+  fitYToBounds,
   panByScreen,
   screenToWorld,
   screenToWorldX,
@@ -169,6 +170,35 @@ describe('fitToBounds', () => {
     expect(next.scaleY).toBe(c.scaleY);
     expect(next.y).toBe(c.y);
     expect(worldToScreenX(next, BOUNDS.minX)).toBeCloseTo(10);
+  });
+
+  it('fitYToBounds leaves the x axis exactly as it was', () => {
+    const c = cam();
+    const next = fitYToBounds(c, BOUNDS, VIEWPORT, 10);
+    expect(next.scaleX).toBe(c.scaleX);
+    expect(next.x).toBe(c.x);
+    expect(worldToScreenY(next, BOUNDS.minY)).toBeCloseTo(10);
+    expect(worldToScreenY(next, BOUNDS.maxY)).toBeCloseTo(VIEWPORT.height - 10);
+  });
+
+  it('fitYToBounds respects the lane-height limits', () => {
+    // Six lanes in 400 px wants ~63 px each; the line view caps it at 54.
+    const limits: ScaleLimits = {
+      minScaleX: 1e-6,
+      maxScaleX: 1e4,
+      minScaleY: 30,
+      maxScaleY: 54,
+    };
+    expect(fitYToBounds(cam(), BOUNDS, VIEWPORT, 6, limits).scaleY).toBe(54);
+    // …and refuses to go below the floor for a stack that cannot fit.
+    const tall: WorldBounds = { ...BOUNDS, maxY: 40 };
+    expect(fitYToBounds(cam(), tall, VIEWPORT, 6, limits).scaleY).toBe(30);
+  });
+
+  it('composes with fitXToBounds to fit both axes independently', () => {
+    const both = fitYToBounds(fitXToBounds(cam(), BOUNDS, VIEWPORT, 20), BOUNDS, VIEWPORT, 5);
+    expect(worldToScreenX(both, BOUNDS.minX)).toBeCloseTo(20);
+    expect(worldToScreenY(both, BOUNDS.minY)).toBeCloseTo(5);
   });
 });
 

@@ -117,4 +117,18 @@ describe('textCache', () => {
     expect(approxTextWidth('AB', 10)).toBeCloseTo(11);
     expect(approxTextWidth('各停', 10)).toBeCloseTo(20);
   });
+
+  it('measuredTextWidth reads the font size and is stable across calls', () => {
+    // No canvas here, so it falls back to the approximation — which is what
+    // keeps the label collision geometry deterministic in node tests.
+    expect(measuredTextWidth('戸越公園', 'bold 11px system-ui')).toBeCloseTo(44);
+    expect(measuredTextWidth('戸越公園', 'bold 11px system-ui')).toBeCloseTo(44);
+    expect(measuredTextWidth('', 'bold 11px system-ui')).toBe(0);
+  });
+
+  it('measuredTextWidth keys on the font, not just the string', () => {
+    const small = measuredTextWidth('大井町', '9px system-ui');
+    const large = measuredTextWidth('大井町', 'bold 14px system-ui');
+    expect(large).toBeGreaterThan(small);
+  });
 });

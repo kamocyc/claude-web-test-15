@@ -77,6 +77,12 @@ test.describe('build a timetable from scratch, through the GUI only', () => {
     expect(await sim.stations.trackCanBeOvertaken('2番線')).toBe(true);
     expect(await sim.stations.trackCanBeOvertaken('1番線')).toBe(false);
 
+    // Directions, set from the 番線 table: this loop serves the down side only,
+    // which is what a single-sided 待避線 looks like on a real line.
+    await sim.stations.setTrackDirection('2番線', 'up', false);
+    await expect(sim.stations.trackRow('2番線').getByLabel('2番線 の下り')).toBeChecked();
+    await expect(sim.stations.trackRow('2番線').getByLabel('2番線 の上り')).not.toBeChecked();
+
     // The 待避線 is the road a down train stands on at C, so the platform
     // allocator puts the waiting local there and leaves 1番線 for the express.
     await sim.stations.makeDefaultTrack('2番線', 'down');
@@ -87,8 +93,9 @@ test.describe('build a timetable from scratch, through the GUI only', () => {
     // -- 5. a depot attached to A -----------------------------------------
     await sim.stations.addDepot('北車庫', 'A');
     await expect(sim.stations.depotRows).toHaveCount(1);
-    // A depot station sits off the main axis: it must not become a 駅間.
-    await expect(sim.stations.linkRows).toHaveCount(3);
+    // The depot adds its own access link to A on top of the three line 駅間;
+    // it must not become part of the running chain A–B–C–D.
+    await expect(sim.stations.linkRows).toHaveCount(4);
 
     // -- 6. 種別 and 停車パターン -------------------------------------------
     await sim.types.open();
@@ -231,25 +238,29 @@ test.describe('build a timetable from scratch, through the GUI only', () => {
     // -- 11. the simulation, read off the line view's DOM shadow -----------
     await sim.line.open();
 
-    await sim.app.setTime(T0 + 50); // 08:00:50 — 101 is between A and B
+    await sim.line.seek(T0 + 50); // 08:00:50 — 101 is between A and B
     await expect(sim.line.marker(local1)).toHaveAttribute('data-phase', 'running');
     await expect(sim.line.withPhase('running')).not.toHaveCount(0);
 
-    await sim.app.setTime(T0 + 120); // 08:02:00 — 101 stands at B
+    await sim.line.seek(T0 + 120); // 08:02:00 — 101 stands at B
     await expect(sim.line.marker(local1)).toHaveAttribute('data-phase', 'dwelling');
     await expect(sim.line.withPhase('dwelling')).not.toHaveCount(0);
 
     // The overtake this timetable was built around: 101 waits at C from 08:04
     // to 08:09 while 201 runs past it.
-    await sim.app.setTime(T0 + 400); // 08:06:40
+    await sim.line.seek(T0 + 400); // 08:06:40
     await expect(sim.line.marker(local1)).toHaveAttribute('data-reason', 'overtakeWait');
     await expect(sim.line.withReason('overtakeWait')).toHaveCount(1);
     await expect(sim.line.marker(local1)).toHaveAttribute('data-station', stationIds.c);
     await expect(sim.line.marker(local1)).toHaveAttribute('data-track', loopTrackId);
 
-    // Stepping the clock moves the same train on, without a timeout anywhere.
-    await sim.app.step(300); // 08:11:40
-    await expect(sim.line.marker(local1)).not.toHaveAttribute('data-phase', 'dwelling');
+    // Stepping the clock releases it: by 08:10 the wait is over and 101 is
+    // running again on the last section. No timeout anywhere — the shadow
+    // stamps the frame it drew and Playwright waits for that.
+    await sim.line.advance(200); // 08:10:00
+    await expect(sim.line.marker(local1)).toHaveAttribute('data-phase', 'running');
+    await expect(sim.line.marker(local1)).toHaveAttribute('data-reason', '');
+    await expect(sim.line.withReason('overtakeWait')).toHaveCount(0);
 
     // …and the diagram agrees that the overtake happened, and that it is legal.
     await sim.diagram.open();
@@ -259,7 +270,6 @@ test.describe('build a timetable from scratch, through the GUI only', () => {
     const overtake = sim.diagram.overtakeMarkers().first();
     await expect(overtake).toHaveAttribute('data-waiting-train', local1);
     await expect(overtake).toHaveAttribute('data-passing-train', express);
-    expect(local2).toBeTruthy();
 
     // -- 12. export, and check the file describes what we built ------------
     const { download, json } = await sim.app.exportProject();

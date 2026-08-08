@@ -7,6 +7,12 @@
  * The context transform is only ever the DPR base transform set by
  * `useCanvasLayers`, which is what keeps text, marker sizes and stroke widths
  * constant as the line zooms.
+ *
+ * The two module-level scratch objects below are the one exception to "no
+ * globals". They are reusable solver buffers, fully reset at the top of the
+ * draw that uses them, so a draw's output still depends only on its arguments
+ * — they exist because the alternative is allocating a few hundred bytes of
+ * garbage sixty times a second.
  */
 
 import type { TrainId, TrainTypeId } from '@/domain/ids';
@@ -17,20 +23,50 @@ import { crisp, worldToScreenX } from '../canvas/camera';
 import type { HitRects } from '../canvas/hit';
 import type { DrawContext } from '../canvas/recordingContext';
 import { roundRectPath } from '../canvas/recordingContext';
-import { drawLabel } from '../canvas/textCache';
+import { drawLabel, measuredTextWidth } from '../canvas/textCache';
 import type { RenderTheme } from '../canvas/theme';
 import { contrastText, desaturate, withAlpha } from '../canvas/theme';
-import { laneCenterY, placeTrain, type LineLayout } from './layout';
+import {
+  depotBoxLayout,
+  DROPPED,
+  LABEL_ROW_PITCH,
+  laneCenterY,
+  MarkerSlots,
+  placeTrainInto,
+  StationLabelPlacer,
+  type LineLayout,
+  type PlaceTrainArgs,
+  type TrainPlacement,
+} from './layout';
 
-/** Train marker box, CSS pixels. Constant under zoom by design. */
+/**
+ * Train marker box, CSS pixels. Constant under zoom by design.
+ *
+ * Two text rows: the train label, and the 編成 underneath it. Keeping the
+ * formation code *inside* the box rather than floating below it means a
+ * cluster of markers cannot interleave its labels with its neighbours', and
+ * frees the strip under the box for the true-position tick.
+ */
 export const MARKER_W = 92;
-export const MARKER_H = 20;
+export const MARKER_H = 26;
 const MARKER_R = 6;
+/** Minimum clear space between two marker boxes on the same lane. */
+export const MARKER_GAP = 5;
+/** A box displaced by less than this is treated as sitting on its train. */
+const SHIFT_EPSILON = 1.5;
 
 const LABEL_FONT = 'bold 11px system-ui, sans-serif';
 const SUB_FONT = '9px ui-monospace, monospace';
 const STATION_FONT = 'bold 11px system-ui, sans-serif';
+const STATION_FONT_MINOR = '11px system-ui, sans-serif';
 const TRACK_FONT = '9px system-ui, sans-serif';
+const DEPOT_FONT = 'bold 10px system-ui, sans-serif';
+
+/** Reusable solver buffers — see the file header. */
+const labelPlacer = new StationLabelPlacer();
+const markerSlots = new MarkerSlots();
+const placeArgs: PlaceTrainArgs = { km: 0, direction: 'down' };
+const placement: TrainPlacement = { x: 0, lane: 0 };
 
 export interface LineDrawEnv {
   layout: LineLayout;
@@ -61,6 +97,11 @@ function laneY(env: LineDrawEnv, lane: number): number {
   return laneCenterY(lane, env.camera.y, env.camera.scaleY);
 }
 
+/** Screen y of the top edge of lane 0 — the floor of the station-name band. */
+function laneStackTop(env: LineDrawEnv): number {
+  return (0 - env.camera.y) * env.camera.scaleY;
+}
+
 function visible(x0: number, x1: number, viewport: Viewport, slop = 60): boolean {
   return x1 >= -slop && x0 <= viewport.width + slop;
 }
@@ -70,7 +111,8 @@ function visible(x0: number, x1: number, viewport: Viewport, slop = 60): boolean
 // ---------------------------------------------------------------------------
 
 /**
- * Rails, station blocks, platforms, 待避線 tinting and the depot stubs.
+ * Rails, station blocks, platforms, 待避線 tinting, the depot stubs and the
+ * station name band.
  *
  * Redrawn only when the camera or the document changes — never on a clock
  * tick. Nothing here depends on `t`.
@@ -100,6 +142,8 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
   }
 
   // -- depot stubs ----------------------------------------------------------
+  // Only the track. The box itself is on the dynamic layer, because its size
+  // depends on how many formations are stabled.
   for (const depot of layout.depots) {
     const sx0 = worldToScreenX(camera, depot.x0);
     const sx1 = worldToScreenX(camera, depot.x1);
@@ -107,6 +151,7 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
     const y = crisp(laneY(env, depot.index));
     const jx = worldToScreenX(camera, depot.junctionX);
     const jy = crisp(laneY(env, depot.junctionLane));
+    const outward = depot.x0 < depot.junctionX ? -1 : 1;
 
     // The stub angles off the main axis — that diagonal is what reads as
     // "this train is leaving the line and going into the depot".
@@ -115,41 +160,40 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
     ctx.setLineDash([6, 4]);
     ctx.beginPath();
     ctx.moveTo(jx, jy);
-    ctx.lineTo(jx + (depot.x0 < depot.junctionX ? -24 : 24), y);
-    ctx.lineTo(depot.x0 < depot.junctionX ? sx0 : sx1, y);
+    ctx.lineTo(jx + outward * 20, y);
+    ctx.lineTo(outward < 0 ? sx0 : sx1, y);
     ctx.stroke();
     ctx.setLineDash([]);
-
-    const boxW = Math.max(64, Math.abs(sx1 - sx0) * 0.55);
-    const boxX = depot.x0 < depot.junctionX ? sx0 : sx1 - boxW;
-    ctx.fillStyle = theme.depot;
-    ctx.strokeStyle = theme.borderStrong;
-    ctx.lineWidth = 1;
-    roundRectPath(ctx, boxX, y - MARKER_H / 2 - 2, boxW, MARKER_H + 4, 4);
-    ctx.fill();
-    ctx.stroke();
-    drawLabel(ctx, depot.label, boxX + 6, y - 2, TRACK_FONT, theme.textDim, {
-      baseline: 'middle',
-      themeKey: theme.key,
-    });
   }
 
   // -- station blocks -------------------------------------------------------
-  for (const station of layout.stations) {
+  const bandFloor = laneStackTop(env) - 7;
+  const rows = Math.max(
+    1,
+    Math.min(2, Math.floor((laneStackTop(env) - 2) / LABEL_ROW_PITCH)),
+  );
+  planStationLabels(env, rows);
+
+  for (let i = 0; i < layout.stations.length; i++) {
+    const station = layout.stations[i]!;
     const sx0 = worldToScreenX(camera, station.x0);
     const sx1 = worldToScreenX(camera, station.x1);
     if (!visible(sx0, sx1, viewport)) continue;
 
     const topY = laneY(env, station.laneFrom) - camera.scaleY / 2;
     const botY = laneY(env, station.laneTo) + camera.scaleY / 2;
+    const row = labelPlacer.rowAt(i);
+    const labelBaseY = bandFloor - (rows - 1 - row) * LABEL_ROW_PITCH;
 
-    // Vertical station rule.
+    // Vertical station rule. It runs all the way up to the label when there is
+    // one, so a name on the upper row is unambiguously tied to its station.
     const cx = crisp(worldToScreenX(camera, station.x));
+    const ruleTop = row === DROPPED ? topY - 8 : labelBaseY + 2;
     ctx.strokeStyle = station.isConnectionPoint ? theme.accent : theme.gridStrong;
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 3]);
     ctx.beginPath();
-    ctx.moveTo(cx, topY - 14);
+    ctx.moveTo(cx, Math.min(ruleTop, topY - 8));
     ctx.lineTo(cx, botY);
     ctx.stroke();
     ctx.setLineDash([]);
@@ -187,12 +231,38 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
       }
     }
 
-    drawLabel(ctx, station.name, cx, topY - 18, STATION_FONT, theme.text, {
-      align: 'center',
-      baseline: 'top',
-      themeKey: theme.key,
-    });
+    if (row === DROPPED) continue;
+    drawLabel(
+      ctx,
+      station.name,
+      cx,
+      labelBaseY,
+      station.isMajorStop ? STATION_FONT : STATION_FONT_MINOR,
+      station.isMajorStop ? theme.text : theme.textDim,
+      { align: 'center', baseline: 'bottom', themeKey: theme.key },
+    );
   }
+}
+
+/**
+ * Feed every station name into the shared placer and solve.
+ *
+ * Widths come from `measuredTextWidth`, which memoizes by font and string —
+ * the station names are a fixed set, so after the first draw this is a map
+ * lookup rather than a text-shaping call.
+ */
+function planStationLabels(env: LineDrawEnv, rows: number): void {
+  const { layout, camera } = env;
+  labelPlacer.reset(rows);
+  for (const station of layout.stations) {
+    const font = station.isMajorStop ? STATION_FONT : STATION_FONT_MINOR;
+    labelPlacer.push(
+      worldToScreenX(camera, station.x),
+      measuredTextWidth(station.name, font),
+      station.labelPriority,
+    );
+  }
+  labelPlacer.solve();
 }
 
 /** Small chevrons along a running lane, so the direction is never ambiguous. */
@@ -220,8 +290,19 @@ function drawDirectionTicks(
 // Dynamic layer
 // ---------------------------------------------------------------------------
 
+/** Should this train be drawn at all, at this instant, with these filters? */
+function isDrawn(train: TrainRuntime, showDeadhead: boolean): boolean {
+  if (train.phase.phase === 'pending' || train.phase.phase === 'finished') return false;
+  return showDeadhead || train.category === 'service';
+}
+
 /**
- * Train markers and depot contents. Redrawn every frame while the clock runs.
+ * Train markers and depot boxes. Redrawn every frame while the clock runs.
+ *
+ * Two passes over the snapshot: the first places every visible train and hands
+ * the positions to `MarkerSlots`, the second draws using the de-overlapped
+ * result. The passes use the same predicate and the same order, so slot `k` in
+ * the second pass is slot `k` from the first without an index array.
  *
  * Pending trains are not drawn at all — a 未出庫 train has no position, and
  * parking them all at the origin would be a lie.
@@ -230,23 +311,58 @@ export function drawLineDynamic(ctx: DrawContext, env: LineDynamicEnv): void {
   const { layout, camera, viewport, snapshot, hits } = env;
 
   ctx.clearRect(0, 0, viewport.width, viewport.height);
-  drawDepotContents(ctx, env);
+  drawDepots(ctx, env);
 
+  markerSlots.reset();
   for (const train of snapshot.trains) {
-    if (train.phase.phase === 'pending') continue;
-    if (train.phase.phase === 'finished') continue;
-    if (!env.showDeadhead && train.category !== 'service') continue;
-
-    const placement = placementOf(layout, train);
+    if (!isDrawn(train, env.showDeadhead)) continue;
+    placementInto(layout, train, placement);
     const sx = worldToScreenX(camera, placement.x);
-    const sy = laneY(env, placement.lane);
+    if (sx < -MARKER_W || sx > viewport.width + MARKER_W) continue;
+    markerSlots.push(placement.lane, sx);
+  }
+  markerSlots.solve(MARKER_W, MARKER_GAP);
+
+  let slot = 0;
+  for (const train of snapshot.trains) {
+    if (!isDrawn(train, env.showDeadhead)) continue;
+    placementInto(layout, train, placement);
+    const sx = worldToScreenX(camera, placement.x);
     if (sx < -MARKER_W || sx > viewport.width + MARKER_W) continue;
 
+    const i = slot++;
+    const boxX = markerSlots.xAt(i);
+    const sy = laneY(env, placement.lane);
     const dimmed =
       env.highlightDutyId !== undefined && train.dutyId !== env.highlightDutyId;
-    drawTrainMarker(ctx, env, train, sx, sy, dimmed);
-    hits?.push(train.trainId, sx - MARKER_W / 2, sy - MARKER_H / 2, MARKER_W, MARKER_H);
+    drawTrainMarker(ctx, env, train, boxX, sx, sy, dimmed);
+    hits?.push(train.trainId, boxX - MARKER_W / 2, sy - MARKER_H / 2, MARKER_W, MARKER_H);
   }
+}
+
+/** Where a runtime train sits in world space, written into `out`. */
+function placementInto(
+  layout: LineLayout,
+  train: TrainRuntime,
+  out: TrainPlacement,
+): TrainPlacement {
+  const phase = train.phase;
+  placeArgs.km = train.km;
+  placeArgs.direction = train.direction;
+  placeArgs.stationId = undefined;
+  placeArgs.trackId = undefined;
+  placeArgs.fromStationId = undefined;
+  placeArgs.toStationId = undefined;
+  if (phase.phase === 'dwelling' || phase.phase === 'passing') {
+    placeArgs.stationId = phase.stationId;
+    placeArgs.trackId = phase.trackId;
+    placeArgs.km = phase.km;
+  } else if (phase.phase === 'running') {
+    placeArgs.fromStationId = phase.fromStationId;
+    placeArgs.toStationId = phase.toStationId;
+    placeArgs.km = phase.km;
+  }
+  return placeTrainInto(layout, placeArgs, out);
 }
 
 /** Where a runtime train sits in world space. */
@@ -254,21 +370,7 @@ export function placementOf(
   layout: LineLayout,
   train: TrainRuntime,
 ): { x: number; lane: number } {
-  const phase = train.phase;
-  const args: Parameters<typeof placeTrain>[1] = {
-    km: train.km,
-    direction: train.direction,
-  };
-  if (phase.phase === 'dwelling' || phase.phase === 'passing') {
-    args.stationId = phase.stationId;
-    if (phase.trackId !== undefined) args.trackId = phase.trackId;
-    args.km = phase.km;
-  } else if (phase.phase === 'running') {
-    args.fromStationId = phase.fromStationId;
-    args.toStationId = phase.toStationId;
-    args.km = phase.km;
-  }
-  return placeTrain(layout, args);
+  return placementInto(layout, train, { x: 0, lane: 0 });
 }
 
 function drawTrainMarker(
@@ -276,6 +378,7 @@ function drawTrainMarker(
   env: LineDynamicEnv,
   train: TrainRuntime,
   cx: number,
+  anchorX: number,
   cy: number,
   dimmed: boolean,
 ): void {
@@ -288,6 +391,20 @@ function drawTrainMarker(
 
   const phase = train.phase;
   const waiting = phase.phase === 'dwelling' && phase.reason === 'overtakeWait';
+
+  // The box has slid along the lane to avoid its neighbours, so say where the
+  // train actually is: a tick at the true km plus a leader back to the box.
+  if (Math.abs(cx - anchorX) > SHIFT_EPSILON) {
+    const tickY = cy + MARKER_H / 2;
+    ctx.strokeStyle = dimmed ? withAlpha(theme.textFaint, 0.5) : withAlpha(baseColor, 0.95);
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(crisp(anchorX), tickY - 3);
+    ctx.lineTo(crisp(anchorX), tickY + 6);
+    ctx.lineTo(crisp(cx), tickY + 6);
+    ctx.stroke();
+  }
 
   // 待避中 ring FIRST, so the marker sits inside it.
   if (waiting && !dimmed) {
@@ -315,7 +432,7 @@ function drawTrainMarker(
 
   // Direction chevron at the leading edge.
   const dir = train.direction === 'down' ? 1 : -1;
-  const tipX = cx + dir * (MARKER_W / 2 - 7);
+  const tipX = cx + dir * (MARKER_W / 2 - 6);
   ctx.fillStyle = withAlpha('#ffffff', dimmed ? 0.35 : 0.85);
   ctx.beginPath();
   ctx.moveTo(tipX, cy);
@@ -325,20 +442,27 @@ function drawTrainMarker(
   ctx.fill();
 
   const textColor = dimmed ? withAlpha(theme.text, 0.4) : contrastText(baseColor);
-  drawLabel(ctx, train.label, cx - dir * 5, cy + 0.5, LABEL_FONT, textColor, {
-    align: 'center',
-    baseline: 'middle',
-    themeKey: theme.key,
-  });
-
+  const textX = cx - dir * 6;
   const sub =
     train.formationCode !== undefined
       ? train.cars !== undefined
         ? `${train.formationCode}(${train.cars})`
         : train.formationCode
       : undefined;
-  if (sub !== undefined) {
-    drawLabel(ctx, sub, cx, cy + MARKER_H / 2 + 2, SUB_FONT, dimmed ? theme.textFaint : theme.textDim, {
+
+  if (sub === undefined) {
+    drawLabel(ctx, train.label, textX, cy + 0.5, LABEL_FONT, textColor, {
+      align: 'center',
+      baseline: 'middle',
+      themeKey: theme.key,
+    });
+  } else {
+    drawLabel(ctx, train.label, textX, cy - 1, LABEL_FONT, textColor, {
+      align: 'center',
+      baseline: 'bottom',
+      themeKey: theme.key,
+    });
+    drawLabel(ctx, sub, textX, cy - 1, SUB_FONT, withAlpha(textColor, 0.85), {
       align: 'center',
       baseline: 'top',
       themeKey: theme.key,
@@ -364,27 +488,104 @@ function drawWaitBadge(ctx: DrawContext, theme: RenderTheme, x: number, y: numbe
   });
 }
 
-/** Which formations are sitting in each depot right now. */
-function drawDepotContents(ctx: DrawContext, env: LineDynamicEnv): void {
+/**
+ * The depot boxes: name, how many formations are stabled, and — only once the
+ * box is wide enough to hold them — which ones.
+ *
+ * A depot is drawn whether or not anything is in it. "鷺沼車庫 留置 0本" is a
+ * fact worth showing; a box that vanishes when the last train leaves just
+ * looks like a rendering bug.
+ */
+function drawDepots(ctx: DrawContext, env: LineDynamicEnv): void {
   const { layout, camera, theme, snapshot, viewport } = env;
   for (const depot of layout.depots) {
-    const ids = snapshot.depotOccupancy.get(depot.depotId) ?? [];
-    if (ids.length === 0) continue;
     const sx0 = worldToScreenX(camera, depot.x0);
     const sx1 = worldToScreenX(camera, depot.x1);
-    if (!visible(sx0, sx1, viewport)) continue;
-    const y = laneY(env, depot.index);
-    const codes = ids
-      .map((id) => env.formations.get(id)?.code ?? id)
-      .slice(0, 6)
-      .join(' ');
-    const text = ids.length > 6 ? `${codes} +${ids.length - 6}` : codes;
-    const anchor = depot.x0 < depot.junctionX ? sx0 : sx1;
-    drawLabel(ctx, text, anchor + 6, y + MARKER_H / 2 + 4, SUB_FONT, theme.textDim, {
+    if (!visible(sx0, sx1, viewport, 140)) continue;
+
+    const junctionX = worldToScreenX(camera, depot.junctionX);
+    const outward = depot.x0 < depot.junctionX ? -1 : 1;
+    const box = depotBoxLayout({
+      junctionX,
+      stubEndX: outward < 0 ? sx0 : sx1,
+      centerY: laneY(env, depot.index),
+      laneHeight: camera.scaleY,
+      viewportWidth: viewport.width,
+    });
+
+    ctx.fillStyle = theme.depot;
+    ctx.strokeStyle = theme.borderStrong;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    roundRectPath(ctx, box.x, box.y, box.w, box.h, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    const ids = snapshot.depotOccupancy.get(depot.depotId) ?? [];
+    const nameY = box.y + 3;
+    const detailY = nameY + 12;
+    drawLabel(ctx, depot.label, box.x + 6, nameY, DEPOT_FONT, theme.text, {
       baseline: 'top',
       themeKey: theme.key,
     });
+
+    if (ids.length === 0) {
+      drawLabel(ctx, '留置なし', box.x + 6, detailY, SUB_FONT, theme.textFaint, {
+        baseline: 'top',
+        themeKey: theme.key,
+      });
+      continue;
+    }
+    if (!box.showCodes) {
+      // Too narrow for the codes, so spend the whole line on the count.
+      drawLabel(ctx, `留置 ${ids.length}本`, box.x + 6, detailY, SUB_FONT, theme.textDim, {
+        baseline: 'top',
+        themeKey: theme.key,
+      });
+      continue;
+    }
+    drawLabel(ctx, `${ids.length}本`, box.x + box.w - 6, nameY, SUB_FONT, theme.accent, {
+      align: 'right',
+      baseline: 'top',
+      themeKey: theme.key,
+    });
+    drawLabel(
+      ctx,
+      fitCodes(ids, env.formations, box.w - 12),
+      box.x + 6,
+      detailY,
+      SUB_FONT,
+      theme.textDim,
+      { baseline: 'top', themeKey: theme.key },
+    );
   }
+}
+
+/**
+ * As many formation codes as fit in `widthPx`, with `+N` for the remainder.
+ *
+ * Builds at most one string per depot per frame, which is the price of showing
+ * live occupancy at all; the widths themselves come from the memoized
+ * measurement cache.
+ */
+function fitCodes(
+  ids: readonly string[],
+  formations: Map<string, Formation>,
+  widthPx: number,
+): string {
+  let text = '';
+  let shown = 0;
+  for (const id of ids) {
+    const code = formations.get(id)?.code ?? id;
+    const next = shown === 0 ? code : `${text} ${code}`;
+    const remaining = ids.length - shown - 1;
+    const suffix = remaining > 0 ? ` +${remaining}` : '';
+    if (measuredTextWidth(next + suffix, SUB_FONT) > widthPx) break;
+    text = next;
+    shown++;
+  }
+  if (shown === 0) return `+${ids.length}`;
+  return shown === ids.length ? text : `${text} +${ids.length - shown}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +626,13 @@ export function drawLineOverlay(ctx: DrawContext, env: LineOverlayEnv): void {
 // Digest support
 // ---------------------------------------------------------------------------
 
-/** Integer screen positions of every drawn train — the E2E digest payload. */
+/**
+ * Integer screen positions of every drawn train — the E2E digest payload.
+ *
+ * These are **true** positions. The marker box may have slid a few pixels
+ * along its lane to stay readable, but nothing outside the draw is ever told
+ * about that: the digest and the DOM shadow report where the train is.
+ */
 export function lineTrainPositions(
   layout: LineLayout,
   camera: Camera2D,

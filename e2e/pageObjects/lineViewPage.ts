@@ -39,6 +39,28 @@ export class LineViewPage {
     return this.page.getByTestId(TID.lineViewTrains);
   }
 
+  /**
+   * Move the clock and wait for the shadow to publish that exact frame.
+   *
+   * The shadow stamps the clock position it was built from onto `data-sim-t`,
+   * so there is a real signal to wait on rather than a sleep.
+   */
+  async seek(sec: number): Promise<void> {
+    await this.app.setTime(sec);
+    await this.waitForFrame();
+  }
+
+  /** Nudge the clock forward and wait for the resulting frame. */
+  async advance(deltaSec: number): Promise<void> {
+    await this.app.step(deltaSec);
+    await this.waitForFrame();
+  }
+
+  private async waitForFrame(): Promise<void> {
+    const t = await this.app.time();
+    await expect(this.shadow).toHaveAttribute('data-sim-t', String(Math.round(t)));
+  }
+
   markers(): Locator {
     return this.page.getByTestId(TID.trainMarker);
   }

@@ -260,6 +260,32 @@ export function fitXToBounds(
   };
 }
 
+/**
+ * Like `fitToBounds` but only for the y axis; x scale and origin are kept.
+ *
+ * The line view fits the two axes with different padding and different scale
+ * limits — x is a free zoom over metres, y is a lane pitch that must stay in a
+ * legible band — so it composes `fitXToBounds` and this rather than using the
+ * uniform `fitToBounds`.
+ */
+export function fitYToBounds(
+  cam: Camera2D,
+  bounds: WorldBounds,
+  viewport: Viewport,
+  paddingPx = 16,
+  limits: ScaleLimits = DEFAULT_SCALE_LIMITS,
+): Camera2D {
+  const spanY = Math.max(bounds.maxY - bounds.minY, Number.EPSILON);
+  const usableH = Math.max(viewport.height - paddingPx * 2, 1);
+  const scaleY = clampNumber(usableH / spanY, limits.minScaleY, limits.maxScaleY);
+  return {
+    scaleX: cam.scaleX,
+    scaleY,
+    x: cam.x,
+    y: bounds.minY - paddingPx / scaleY,
+  };
+}
+
 /** Centre a world point in the viewport without changing scale. */
 export function centerOn(
   cam: Camera2D,

@@ -181,6 +181,122 @@ export const TID = {
   // inspector --------------------------------------------------------------
   inspector: 'inspector',
   inspectorTitle: 'inspector-title',
+
+  // stop editor — 停車設定 / 待避 / 緩急接続 ----------------------------------
+  stopEditor: 'stop-editor',
+  stopEditorTitle: 'stop-editor-title',
+  stopEditorEmpty: 'stop-editor-empty',
+  stopKindSelect: 'stop-kind-select',
+  stopOperational: 'stop-operational',
+  stopNoteInput: 'stop-note-input',
+  overtakeList: 'overtake-list',
+  /** Checkbox: this stop's train is overtaken here by `trainId`. */
+  overtakeCandidate: (trainId: string) => `overtake-candidate-${trainId}`,
+  overtakeClear: 'overtake-clear',
+  overtakeEmpty: 'overtake-empty',
+  connectList: 'connect-list',
+  /** Checkbox: this stop's train connects here to `trainId`. */
+  connectCandidate: (trainId: string) => `connect-candidate-${trainId}`,
+  connectClear: 'connect-clear',
+  connectEmpty: 'connect-empty',
+
+  // train attribute editing / deletion ---------------------------------------
+  trainEditor: 'train-editor',
+  trainEditNumber: 'train-edit-number',
+  trainEditType: 'train-edit-type',
+  trainEditDirection: 'train-edit-direction',
+  trainEditCategory: 'train-edit-category',
+  trainEditMinCars: 'train-edit-min-cars',
+  trainEditNote: 'train-edit-note',
+  trainEditDayType: (dayTypeId: string) => `train-edit-day-type-${dayTypeId}`,
+  trainHeaderNumber: (trainId: string) => `train-header-number-${trainId}`,
+  trainDelete: (trainId: string) => `train-delete-${trainId}`,
+  trainDeleteDialog: 'train-delete-dialog',
+  trainDeleteDependants: 'train-delete-dependants',
+  trainDeleteConfirm: 'train-delete-confirm',
+  trainDeleteCancel: 'train-delete-cancel',
+
+  // line editor --------------------------------------------------------------
+  lineEditor: 'line-editor',
+  lineNameInput: 'line-name-input',
+  lineDownLabelInput: 'line-down-label-input',
+  lineUpLabelInput: 'line-up-label-input',
+  lineColorInput: 'line-color-input',
+
+  // link extra fields --------------------------------------------------------
+  linkDistanceInput: 'link-distance-input',
+  linkTrackCountSelect: 'link-track-count-select',
+  linkMaxSpeedInput: 'link-max-speed-input',
+
+  // performance profiles -----------------------------------------------------
+  perfProfileList: 'perf-profile-list',
+  perfProfileAdd: 'perf-profile-add',
+  perfProfileNameInput: 'perf-profile-name-input',
+  perfProfileRow: (profileId: string) => `perf-profile-row-${profileId}`,
+  perfProfileAccel: (profileId: string) => `perf-profile-accel-${profileId}`,
+  perfProfileDecel: (profileId: string) => `perf-profile-decel-${profileId}`,
+  perfProfileMaxSpeed: (profileId: string) => `perf-profile-max-speed-${profileId}`,
+  perfProfileRemove: (profileId: string) => `perf-profile-remove-${profileId}`,
+  trainTypeProfileSelect: (typeId: string) => `train-type-profile-select-${typeId}`,
+
+  // stop pattern extra fields ------------------------------------------------
+  patternNameCell: (patternId: string) => `pattern-name-cell-${patternId}`,
+  patternDwellCell: (patternId: string, stationId: string) =>
+    `pattern-dwell-${patternId}-${stationId}`,
+
+  // 設定 screen (プロジェクト / 検証 / 暦) --------------------------------------
+  settingsScreen: 'settings-screen',
+  projectNameInput: 'project-name-input',
+  serviceDayStartInput: 'service-day-start-input',
+  serviceDayEndInput: 'service-day-end-input',
+  timeGrainSelect: 'time-grain-select',
+  validationConfigList: 'validation-config-list',
+  validationNumberInput: (key: string) => `validation-number-${key}`,
+  validationSeveritySelect: (ruleId: string) => `validation-severity-${ruleId}`,
+  dayTypeList: 'day-type-list',
+  dayTypeAdd: 'day-type-add',
+  dayTypeNameInput: 'day-type-name-input',
+  dayTypeKindSelect: 'day-type-kind-select',
+  dayTypeRow: (dayTypeId: string) => `day-type-row-${dayTypeId}`,
+  dayTypeNameCell: (dayTypeId: string) => `day-type-name-${dayTypeId}`,
+  dayTypeColorCell: (dayTypeId: string) => `day-type-color-${dayTypeId}`,
+  dayTypeRemove: (dayTypeId: string) => `day-type-remove-${dayTypeId}`,
+  calendarList: 'calendar-list',
+  calendarDateInput: 'calendar-date-input',
+  calendarDayTypeSelect: 'calendar-day-type-select',
+  calendarAdd: 'calendar-add',
+  calendarRow: (date: string) => `calendar-row-${date}`,
+
+  // duty leg editing ---------------------------------------------------------
+  dutyExpand: (dutyId: string) => `duty-expand-${dutyId}`,
+  dutyLegList: (dutyId: string) => `duty-leg-list-${dutyId}`,
+  dutyLegUp: (dutyId: string, legIndex: number) => `duty-leg-up-${dutyId}-${legIndex}`,
+  dutyLegDown: (dutyId: string, legIndex: number) => `duty-leg-down-${dutyId}-${legIndex}`,
+  dutyLegRemove: (dutyId: string, legIndex: number) => `duty-leg-remove-${dutyId}-${legIndex}`,
+  dutyAddStableLeg: (dutyId: string) => `duty-add-stable-leg-${dutyId}`,
+  dutyAddInspectionLeg: (dutyId: string) => `duty-add-inspection-leg-${dutyId}`,
+  dutyRequiredCars: (dutyId: string) => `duty-required-cars-${dutyId}`,
+  dutyRequiredSeries: (dutyId: string) => `duty-required-series-${dutyId}`,
+  dutyDayType: (dutyId: string, dayTypeId: string) => `duty-day-type-${dutyId}-${dayTypeId}`,
+
+  // formation extra fields ---------------------------------------------------
+  formationSeriesCell: (formationId: string) => `formation-series-cell-${formationId}`,
+  formationCarsCell: (formationId: string) => `formation-cars-cell-${formationId}`,
+  formationDepotCell: (formationId: string) => `formation-depot-cell-${formationId}`,
+  formationOdometerCell: (formationId: string) => `formation-odometer-cell-${formationId}`,
+
+  // inspection extra fields --------------------------------------------------
+  inspectionRuleWarnDays: (ruleId: string) => `inspection-rule-warn-days-${ruleId}`,
+  inspectionRuleWarnKm: (ruleId: string) => `inspection-rule-warn-km-${ruleId}`,
+  inspectionRuleOutOfService: (ruleId: string) => `inspection-rule-out-of-service-${ruleId}`,
+  inspectionRuleAppliesTo: (ruleId: string) => `inspection-rule-applies-to-${ruleId}`,
+  inspectionRuleSeries: (ruleId: string, seriesId: string) =>
+    `inspection-rule-series-${ruleId}-${seriesId}`,
+  inspectionRuleDepot: (ruleId: string, depotId: string) =>
+    `inspection-rule-depot-${ruleId}-${depotId}`,
+  inspectionRecordStatus: (recordId: string) => `inspection-record-status-${recordId}`,
+  inspectionRecordOdometer: (recordId: string) => `inspection-record-odometer-${recordId}`,
+  inspectionRecordDepot: (recordId: string) => `inspection-record-depot-${recordId}`,
 } as const;
 
 /**
@@ -207,6 +323,7 @@ export const ROUTES = {
   stations: 'stations',
   types: 'types',
   inspections: 'inspections',
+  settings: 'settings',
 } as const;
 
 export type RouteName = (typeof ROUTES)[keyof typeof ROUTES];

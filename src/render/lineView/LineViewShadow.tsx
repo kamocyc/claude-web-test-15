@@ -25,6 +25,16 @@ export interface LineViewShadowProps {
   doc: ProjectDocument | undefined;
   snapshot: SimSnapshot | undefined;
   showDeadhead: boolean;
+  /**
+   * The clock position the snapshot was taken at.
+   *
+   * `snapshot` is the render stream's POOLED `SimSnapshot`: one object, refilled
+   * in place, so its identity never changes. Without a value that does change,
+   * `memo` below would compare equal on every clock tick and the shadow would
+   * stay frozen at whatever time the view happened to mount. It is also
+   * published as `data-sim-t`, so a test can tell which frame it is reading.
+   */
+  t: number | undefined;
 }
 
 function phaseDetails(train: TrainRuntime): {
@@ -60,6 +70,7 @@ export const LineViewShadow = memo(function LineViewShadow({
   doc,
   snapshot,
   showDeadhead,
+  t,
 }: LineViewShadowProps) {
   const trains = (snapshot?.trains ?? []).filter(
     (t) =>
@@ -74,7 +85,12 @@ export const LineViewShadow = memo(function LineViewShadow({
   const depots = doc ? entityList(doc.depots) : [];
 
   return (
-    <ul className="visually-hidden" data-testid={TID.lineViewTrains} aria-label="列車位置">
+    <ul
+      className="visually-hidden"
+      data-testid={TID.lineViewTrains}
+      data-sim-t={t === undefined ? '' : String(Math.round(t))}
+      aria-label="列車位置"
+    >
       {depots.map((depot) => {
         const ids = snapshot?.depotOccupancy.get(depot.id) ?? [];
         const codes = ids.map((id) => doc?.formations.byId[id]?.code ?? id);

@@ -57,4 +57,14 @@ export class Simulator {
   async open(query?: string): Promise<void> {
     await this.app.open(query);
   }
+
+  /**
+   * Look a station's id up by name, through the 駅・線路 list.
+   *
+   * Leaves the app on that screen — callers navigate on afterwards.
+   */
+  async stationIdByName(name: string): Promise<string> {
+    await this.stations.open();
+    return this.stations.stationIdOf(name);
+  }
 }

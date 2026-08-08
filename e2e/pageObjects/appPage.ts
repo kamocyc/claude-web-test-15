@@ -167,6 +167,13 @@ export class AppPage {
     return this.page.getByTestId(TID.problemItem);
   }
 
+  /** Collapse or expand the problem panel (the ▾ / ▸ toggle in its header). */
+  async setProblemPanelOpen(open: boolean): Promise<void> {
+    const toggle = this.problemPanel.locator('button[aria-expanded]').first();
+    if ((await toggle.getAttribute('aria-expanded')) !== String(open)) await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', String(open));
+  }
+
   /** Every problem row whose severity attribute says `error`. */
   errorItems(): Locator {
     return this.page.locator(`[data-testid="${TID.problemItem}"][data-severity="error"]`);

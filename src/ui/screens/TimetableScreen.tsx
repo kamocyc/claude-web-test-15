@@ -26,11 +26,13 @@ import { newId } from '@/store/idPool';
 import { recomputeTrainTimes } from '@/store/reducer';
 import { useUiStore } from '@/store/uiStore';
 import { useDispatch, useDoc } from '../hooks';
+import { StopEditor } from './StopEditor';
+import { TrainDeleteDialog, TrainEditor } from './TrainEditor';
 
 import styles from './Timetable.module.css';
 
 const ROW_H = 22;
-const HEADER_H = 46;
+const HEADER_H = 60;
 const COL_W = 62;
 const NAME_W = 96;
 const LABEL_W = 26;
@@ -103,6 +105,7 @@ export function TimetableScreen() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [cursor, setCursor] = useState<Cursor>({ col: 0, row: 0 });
   const [editing, setEditing] = useState<{ key: string; text: string } | undefined>(undefined);
+  const [deleteTrainId, setDeleteTrainId] = useState<TrainId | undefined>(undefined);
 
   const virtualizer = useVirtualizer({
     count: trains.length,
@@ -258,6 +261,16 @@ export function TimetableScreen() {
   const totalHeight = HEADER_H + stations.length * 3 * ROW_H;
   const cursorTrain = trains[cursor.col];
 
+  // The stop the two editors below the grid act on: whichever cell the cursor
+  // is in. Selecting a column header moves the cursor too, so clicking a train
+  // and then a station is enough to reach any stop.
+  const cursorStation = stations[Math.floor(cursor.row / 3)];
+  const cursorStopIndex =
+    cursorTrain !== undefined && cursorStation !== undefined
+      ? stopIndexMaps.get(cursorTrain.id)?.get(cursorStation.id)
+      : undefined;
+  const deleteTrain = deleteTrainId === undefined ? undefined : doc.trains.byId[deleteTrainId];
+
   return (
     <div className={styles.screen}>
       <TrainAddForm />
@@ -341,8 +354,12 @@ export function TimetableScreen() {
                       <button
                         type="button"
                         className={styles.headerButton}
-                        onClick={() => select({ kind: 'train', trainId: train.id })}
-                        title={`${type?.name ?? ''} ${train.number}`}
+                        data-testid={TID.trainHeaderNumber(train.id)}
+                        onClick={() => {
+                          select({ kind: 'train', trainId: train.id });
+                          setCursor((c) => ({ ...c, col: item.index }));
+                        }}
+                        title={`${type?.name ?? ''} ${train.number} — クリックで下の編集欄に読み込みます`}
                       >
                         <span
                           className={styles.headerType}
@@ -352,6 +369,16 @@ export function TimetableScreen() {
                         </span>
                         <br />
                         <span className={styles.headerNumber}>{train.number}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.headerDelete}
+                        data-testid={TID.trainDelete(train.id)}
+                        aria-label={`列車 ${train.number} を削除`}
+                        title={`列車 ${train.number} を削除`}
+                        onClick={() => setDeleteTrainId(train.id)}
+                      >
+                        削除
                       </button>
                     </div>
                     {stations.map((station, stationIndex) => {
@@ -446,6 +473,29 @@ export function TimetableScreen() {
           </div>
         </div>
       )}
+
+      <div className={styles.editors}>
+        <TrainEditor
+          doc={doc}
+          train={cursorTrain}
+          onRequestDelete={() => {
+            if (cursorTrain !== undefined) setDeleteTrainId(cursorTrain.id);
+          }}
+        />
+        <StopEditor doc={doc} train={cursorTrain} stopIndex={cursorStopIndex} />
+      </div>
+
+      {deleteTrain !== undefined ? (
+        <TrainDeleteDialog
+          doc={doc}
+          train={deleteTrain}
+          onCancel={() => setDeleteTrainId(undefined)}
+          onConfirm={() => {
+            dispatch({ type: 'train/remove', trainIds: [deleteTrain.id] });
+            setDeleteTrainId(undefined);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
