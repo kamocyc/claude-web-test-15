@@ -1,0 +1,49 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`決定性とダイジェスト > matches the digest baseline 1`] = `
+{
+  "assignments": 32,
+  "connectionStops": 137,
+  "deadheadTrains": 64,
+  "duties": 32,
+  "dutiesByCars": {
+    "5": 23,
+    "7": 9,
+  },
+  "formations": 30,
+  "formationsByCars": {
+    "5": 22,
+    "7": 8,
+  },
+  "inspectionRecords": 122,
+  "links": 22,
+  "overtakenStops": 137,
+  "peakConcurrentDuties": 24,
+  "serviceTrains": 545,
+  "stationTracks": 69,
+  "stations": 23,
+  "totalKm": 7514,
+  "trains": 609,
+  "trainsByBand": {
+    "(回送)": 64,
+    "b1-early": 18,
+    "b2-buildup": 16,
+    "b3-ampeak": 54,
+    "b4-taper": 24,
+    "b5-midday": 192,
+    "b6-pmpeak": 127,
+    "b7-evening": 96,
+    "b8-latenight": 18,
+  },
+  "trainsByDirection": {
+    "down": 302,
+    "up": 307,
+  },
+  "trainsByType": {
+    "各駅停車(緑)": 274,
+    "各駅停車(青)": 140,
+    "回送": 64,
+    "急行": 131,
+  },
+}
+`;

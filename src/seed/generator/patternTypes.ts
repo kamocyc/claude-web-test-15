@@ -23,6 +23,15 @@ export interface PatternSlot {
   id: string;
   /** Seconds after the start of the cycle at which this train leaves its origin. */
   offsetSec: number;
+  /**
+   * Where this train sits in the *cycle*, when that differs from where it
+   * leaves its origin — which happens when a slot starts further out on the
+   * line than the rest of the cycle (the 鷺沼発 急行 leaves 490 s before the
+   * cycle it belongs to). The band window is tested against this, so a band
+   * does not spill an extra train into its successor's first cycle. Defaults
+   * to `offsetSec`.
+   */
+  windowOffsetSec?: number;
   direction: Direction;
   trainTypeId: TrainTypeId;
   stopPatternId: StopPatternId;

@@ -26,16 +26,23 @@ import type { StationId, TrainId } from '@/domain/ids';
 import type { Depot, Direction, Train, TrainStop } from '@/domain/model';
 import type { Sec } from '@/domain/units';
 import { SeedError } from '../errors';
-import type { Facts, StationKey } from '../oimachi/facts';
+import { NO_OIMACHI_PLATFORM_KEYS, type Facts, type StationKey } from '../oimachi/facts';
 import { timeRoute, type RouteStop } from './stopTimes';
 import type { DutyNode } from './dutyMatch';
 import type { AssignableTrain, TrackBooking } from './trackAssign';
 
 /** Margin between a service train arriving and its 入庫回送 setting off. */
 export const DEPOT_TURN_MARGIN_SEC = 300;
-/** Step and range of the search that paths an empty move into a gap. */
-const SEARCH_STEP_SEC = 60;
-const SEARCH_STEPS = 75;
+/**
+ * Step and range of the search that paths an empty move into a gap.
+ *
+ * The step is the timetable grain, not a minute. On a 16 本/時 line the usable
+ * gaps are only a few tens of seconds wide once a 95 s clearance is demanded at
+ * both ends and at all twenty-one stations at once, so a coarse search walks
+ * straight past every feasible path.
+ */
+const SEARCH_STEP_SEC = 5;
+const SEARCH_STEPS = 900; // 75 minutes either side of the ideal
 /** 続行時隔 demanded of a 回送 against every already-placed train. */
 const DEADHEAD_HEADWAY_SEC = 95;
 
@@ -63,6 +70,21 @@ function depotAxis(facts: Facts): StationKey[] {
   return [...facts.axis, 'saginumaDepot'];
 }
 
+/**
+ * The 回送's path — and it is a *service-speed* path, with a 運転停車 at every
+ * station a 緑各停 would call at.
+ *
+ * This is the single most consequential decision in this file. A 回送 timed
+ * non-stop covers 鷺沼車庫〜大井町 in 22 minutes against a 各停's 33, which means
+ * it closes on and passes service trains in mid-section — physically impossible
+ * on a two-track railway, and a `headway.section` error on every link it does
+ * it. Pathed at 各停 speed the empty move keeps a constant gap to the trains
+ * around it and slots cleanly into the pattern, which is exactly how empty
+ * stock is worked in a dense timetable.
+ *
+ * 二子新地 and 高津 stay `pass`: the 大井町線 pair has no platform there, so a
+ * 回送 on those rails cannot stop even if it wanted to.
+ */
 function routeBetween(facts: Facts, fromKey: StationKey, toKey: StationKey): RouteStop[] {
   const axis = depotAxis(facts);
   const i = axis.indexOf(fromKey);
@@ -70,11 +92,16 @@ function routeBetween(facts: Facts, fromKey: StationKey, toKey: StationKey): Rou
   if (i < 0 || j < 0) throw new SeedError('回送経路が引けません', { from: fromKey, to: toKey });
   if (i === j) throw new SeedError('回送の起終点が同一です', { from: fromKey });
   const slice = i < j ? axis.slice(i, j + 1) : axis.slice(j, i + 1).reverse();
-  return slice.map((key, idx) => ({
-    stationId: facts.S[key],
-    kind: idx === 0 || idx === slice.length - 1 ? ('stop' as const) : ('pass' as const),
-    dwellBase: 0,
-  }));
+  return slice.map((key, idx) => {
+    const station = facts.stationById.get(facts.S[key])!;
+    const isEnd = idx === 0 || idx === slice.length - 1;
+    const noPlatform = NO_OIMACHI_PLATFORM_KEYS.includes(key);
+    return {
+      stationId: station.id,
+      kind: !isEnd && noPlatform ? ('pass' as const) : ('stop' as const),
+      dwellBase: isEnd ? 0 : station.minDwellSec,
+    };
+  });
 }
 
 function directionOf(facts: Facts, route: readonly RouteStop[]): Direction {
@@ -101,14 +128,10 @@ function makeStops(
     const d = timed.dep[i];
     if (a !== undefined) stop.arr = a;
     if (d !== undefined) stop.dep = d;
-    if (i === 0) {
-      stop.operational = true;
-      if (markFirst !== undefined) stop.operation = markFirst;
-    }
-    if (i === route.length - 1) {
-      stop.operational = true;
-      if (markLast !== undefined) stop.operation = markLast;
-    }
+    // Every intermediate call is a 運転停車: the train stands, but no doors open.
+    if (r.kind === 'stop') stop.operational = true;
+    if (i === 0 && markFirst !== undefined) stop.operation = markFirst;
+    if (i === route.length - 1 && markLast !== undefined) stop.operation = markLast;
     return stop;
   });
 }
@@ -125,7 +148,12 @@ export function buildDepotRuns(
   if (first === undefined || last === undefined) {
     throw new SeedError('空の運用に入出庫を付けようとしました');
   }
-  const profileId = cars >= 7 ? facts.profile.car7 : facts.profile.car5;
+  // Every 回送 is timed on the 5-car table, because that is the profile the
+  // 回送 TrainType declares and therefore the one the validator checks against.
+  // A 7-car empty move is a little heavier in reality, but booking it to the
+  // lighter table keeps the path identical to the 各停 slots it threads between,
+  // which is what makes it schedulable at all.
+  const profileId = facts.profile.car5;
   const depotKey = keyOfStation(facts, depot.stationId);
 
   // -- 出庫: ideal, then progressively earlier ------------------------------

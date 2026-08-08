@@ -154,8 +154,24 @@ export function buildOimachiProject(): ProjectDocument {
     };
   });
 
+  /**
+   * 折り返し時分 for duty matching. Deliberately the *preferred* figure, not the
+   * bare minimum: `minTurnbackSec` is what the infrastructure allows, but a
+   * roster that books every turnback at the absolute minimum has no recovery
+   * margin anywhere and trips `turnback.tight` on every single one. Taking the
+   * larger of the two costs a formation or two and buys a plan that a real
+   * depot would sign off.
+   */
+  const preferredTurnback = Math.max(
+    DEFAULT_VALIDATION_CONFIG.preferredTurnbackSec,
+    base.validationConfig.preferredTurnbackSec,
+  );
   const turnaroundSec = (stationId: StationId): number =>
-    facts.stationById.get(stationId)?.minTurnbackSec ?? DEFAULT_VALIDATION_CONFIG.defaultMinTurnbackSec;
+    Math.max(
+      facts.stationById.get(stationId)?.minTurnbackSec ??
+        DEFAULT_VALIDATION_CONFIG.defaultMinTurnbackSec,
+      preferredTurnback,
+    );
 
   const pools: Array<{ cars: number; chains: DutyNode[][] }> = [CARS.express, CARS.local].map(
     (cars) => ({
@@ -394,7 +410,9 @@ function buildFleet(
       slot.dutyIds.push(span.dutyId);
     }
 
-    const spares = cars === CARS.express ? 2 : 3;
+    // 予備編成. One 7-car spare is what the real depot keeps for eight sets;
+    // the 5-car pool is larger and carries two.
+    const spares = cars === CARS.express ? 1 : 2;
     const fleet = allocateCodes(cars, slots.length + spares);
     fleetByCars[cars] = fleet.length;
 
@@ -402,19 +420,21 @@ function buildFleet(
       const id = nextFormationId();
       const commissionedOn = entry.commissionedOn;
       const inService = Math.max(1, daysBetween(commissionedOn, activeDate));
+      // The last spare of each pool is in the shops today — every depot has one.
+      const inShops = i === fleet.length - 1;
       formations.push({
         id,
         code: entry.code,
         seriesId: facts.seriesId[entry.seriesKey]!,
         cars,
         homeDepotId: facts.depotId.saginuma,
-        status: 'active',
+        status: inShops ? 'inInspection' : 'active',
         // Reconstruction: mileage implied by age at the daily average, with a
         // deterministic per-formation offset so the fleet is not uniform.
         odometerKm: Math.round(inService * DAILY_KM * 0.92) + i * 4_300,
         odometerAsOf: activeDate,
         commissionedOn,
-        note: '長津田検車区所属 / 鷺沼常駐',
+        note: inShops ? '長津田検車区所属 / 鷺沼常駐 / 月検査入場中' : '長津田検車区所属 / 鷺沼常駐',
       });
       const slot = slots[i];
       if (slot === undefined) return; // spare
@@ -468,12 +488,25 @@ function allocateCodes(cars: number, needed: number): FleetEntry[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Deterministically staggered history, so the demo opens on a realistic mix of
- * 期限内 / 期限間近 / 期限超過 with no randomness anywhere. Formation *i*'s last
- * 列車検査 was `(3i mod 13)` days ago against a 10-day interval — so roughly a
- * quarter of the fleet is already overdue, a couple are due within two days,
- * and the rest are fine. The other three kinds use co-prime strides against
- * their own intervals for the same effect.
+ * Deterministically staggered history, so the demo opens on a realistic spread
+ * of 期限内 and 期限間近 with no randomness anywhere.
+ *
+ * Formation *i*'s last 列車検査 was `1 + (4i mod 9)` days ago against a ten-day
+ * interval, so about a fifth of the fleet is inside the two-day warning window
+ * on any given morning; the other three kinds use co-prime strides against
+ * moduli chosen to land just short of their own limits, which puts a handful of
+ * formations into 期限間近 on days, on kilometres, or both.
+ *
+ * Nothing in the *rostered* fleet is deliberately overdue. An overdue
+ * inspection is a validation **error**, and a sample project that ships with
+ * errors is not a sample, it is a bug report. The state the demo needs — "this
+ * formation is in the shops today" — is expressed the way a real depot expresses
+ * it: the formation is `inInspection`, carries a **planned** record spanning the
+ * date, and is not rostered. `buildFleet` reserves the spares for exactly that.
+ *
+ * The moduli also leave room for the day's own mileage: `computeInspectionStatus`
+ * derives current km as the baseline plus today's assigned duty, so a formation
+ * one day short of its 30,000 km 月検査 limit would tip over during the day.
  */
 function buildInspectionHistory(
   facts: Facts,
@@ -481,16 +514,35 @@ function buildInspectionHistory(
   activeDate: string,
   nextRecordId: () => InspectionRecordId,
 ): InspectionRecord[] {
-  const strides: Record<string, number> = { train: 3, monthly: 11, bogie: 197, general: 389 };
-  const moduli: Record<string, number> = { train: 13, monthly: 101, bogie: 1_550, general: 3_050 };
+  const strides: Record<string, number> = { train: 4, monthly: 11, bogie: 197, general: 389 };
+  const moduli: Record<string, number> = { train: 9, monthly: 82, bogie: 1_420, general: 2_870 };
   const out: InspectionRecord[] = [];
 
   formations.forEach((formation, i) => {
-    const maxAge = Math.max(0, daysBetween(formation.commissionedOn, activeDate));
+    const maxAge = Math.max(1, daysBetween(formation.commissionedOn, activeDate));
     for (const rule of facts.inspectionRules) {
       const stride = strides[rule.kind] ?? 7;
       const modulus = moduli[rule.kind] ?? 30;
-      const daysAgo = Math.min(((i + 1) * stride) % modulus, maxAge);
+      const depotId = rule.depotIds[0] ?? facts.depotId.saginuma;
+
+      if (formation.status === 'inInspection' && rule.kind === 'monthly') {
+        // In the shops today: a planned record spanning the active date.
+        out.push({
+          id: nextRecordId(),
+          formationId: formation.id,
+          ruleId: rule.id,
+          kind: rule.kind,
+          status: 'planned',
+          from: activeDate,
+          to: addDays(activeDate, rule.outOfServiceDays),
+          depotId,
+          note: '入場中',
+        });
+      }
+
+      // `1 +` matters: a completed inspection dated today, on a formation that
+      // is also rostered today, is a 検査と運用の重複 error.
+      const daysAgo = Math.min(1 + (((i + 1) * stride) % modulus), maxAge);
       const on = addDays(activeDate, -daysAgo);
       out.push({
         id: nextRecordId(),
@@ -501,7 +553,7 @@ function buildInspectionHistory(
         from: on,
         to: on,
         odometerKmAt: Math.max(0, formation.odometerKm - daysAgo * DAILY_KM),
-        depotId: rule.depotIds[0] ?? facts.depotId.saginuma,
+        depotId,
       });
     }
   });

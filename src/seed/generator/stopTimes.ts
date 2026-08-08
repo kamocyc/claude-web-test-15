@@ -21,8 +21,8 @@
  * On the two clearances: `CLEARANCE_ARR_SEC` is how far ahead of the passing
  * train the waiting train must already be standing, and `CLEARANCE_DEP_SEC` is
  * how long after the passing train has gone before the waiting train may
- * follow. The departure clearance is set to the link headway, because after
- * the 待避 the two trains are running nose-to-tail on the same rails.
+ * follow. Both sit just above the 90 s link headway, because either side of a
+ * 待避 the two trains are entering and leaving the same rails nose-to-tail.
  *
  * Where the passing train STOPS (a real 緩急接続 at 旗の台) `express.at(S)`
  * splits into its arrival and its departure, and the two constraints use the
@@ -177,6 +177,43 @@ export function buildStopTimes(facts: Facts, specs: readonly TrainSpec[]): StopT
 
   const trains = new Map<string, TimedTrain>();
 
+  /**
+   * Two indexes for resolving a declared 待避 to the train that does the
+   * passing. `bySpecKey` is the ordinary same-band lookup; `byGridSlot` finds
+   * the same slot in a *neighbouring* band, which matters because every band
+   * from 立上り to 夜間 shares one 15-minute grid and a 待避 declared with
+   * `cycleDelta` at the last cycle of a band legitimately refers to the first
+   * cycle of the next one. Cross-band matches are only accepted when the two
+   * slots are genuinely the same product — same train type AND same stop
+   * pattern — so the 鷺沼直通 急行 of 夕ラッシュ is never confused with the
+   * 溝の口発 急行 of 日中 just because both slots are called `u2`.
+   */
+  const byGridSlot = new Map<string, TrainSpec>();
+  const slotByBand = new Map<string, TrainSpec['slot']>();
+  for (const spec of specs) {
+    byGridSlot.set(`${spec.slotId}|${spec.cycleStartSec}`, spec);
+    slotByBand.set(`${spec.bandId}|${spec.slotId}`, spec.slot);
+  }
+
+  const findPartner = (spec: TrainSpec, bySlotId: string, delta: number): TimedTrain | undefined => {
+    const sameBand = trains.get(specKey(spec.bandId, bySlotId, spec.cycleIndex + delta));
+    if (sameBand !== undefined) return sameBand;
+    const target = byGridSlot.get(
+      `${bySlotId}|${spec.cycleStartSec + delta * spec.cycleSec}`,
+    );
+    if (target === undefined) return undefined;
+    const expected = slotByBand.get(`${spec.bandId}|${bySlotId}`);
+    if (expected === undefined) return undefined;
+    if (
+      target.cycleSec !== spec.cycleSec ||
+      target.trainTypeId !== expected.trainTypeId ||
+      target.stopPatternId !== expected.stopPatternId
+    ) {
+      return undefined;
+    }
+    return trains.get(target.key);
+  };
+
   // -- phase 1: everything runs clear --------------------------------------
   for (const spec of specs) {
     const pattern = patternById.get(spec.stopPatternId);
@@ -241,12 +278,7 @@ export function buildStopTimes(facts: Facts, specs: readonly TrainSpec[]): StopT
             station: stationName(facts, ov.atStationId),
           });
         }
-        const partnerKey = specKey(
-          spec.bandId,
-          ov.bySlotId,
-          spec.cycleIndex + (ov.cycleDelta ?? 0),
-        );
-        const partner = trains.get(partnerKey);
+        const partner = findPartner(spec, ov.bySlotId, ov.cycleDelta ?? 0);
         if (partner === undefined) {
           // Edge of the band: the passing train does not exist, so there is
           // nothing to wait for and the 各停 simply runs clear.
@@ -314,19 +346,16 @@ export function buildStopTimes(facts: Facts, specs: readonly TrainSpec[]): StopT
     if (declared === undefined) continue;
     const me = trains.get(spec.key)!;
     for (const cn of declared) {
-      const partnerKey = specKey(spec.bandId, cn.withSlotId, spec.cycleIndex + (cn.cycleDelta ?? 0));
-      const partner = trains.get(partnerKey);
+      const partner = findPartner(spec, cn.withSlotId, cn.cycleDelta ?? 0);
       if (partner === undefined) continue;
       if (!me.indexOf.has(cn.atStationId)) continue;
       const list = me.connectsTo.get(cn.atStationId) ?? [];
       if (!list.includes(partner.spec.trainId)) list.push(partner.spec.trainId);
       me.connectsTo.set(cn.atStationId, list);
-      // A 緩急接続 is mutual: record it on the 急行 too.
-      if (partner.indexOf.has(cn.atStationId)) {
-        const back = partner.connectsTo.get(cn.atStationId) ?? [];
-        if (!back.includes(me.spec.trainId)) back.push(me.spec.trainId);
-        partner.connectsTo.set(cn.atStationId, back);
-      }
+      // Deliberately one-way. A 緩急接続 runs slow train -> fast train: the
+      // engine only detects a connection when the receiving train has fewer
+      // stops left than the one handing passengers over, so recording the
+      // mirror image on the 急行 would declare a transfer that can never exist.
     }
   }
 
@@ -335,9 +364,7 @@ export function buildStopTimes(facts: Facts, specs: readonly TrainSpec[]): StopT
     const me = trains.get(spec.key)!;
     verifyMonotonic(facts, me);
     for (const ov of spec.slot.overtakes ?? []) {
-      const partner = trains.get(
-        specKey(spec.bandId, ov.bySlotId, spec.cycleIndex + (ov.cycleDelta ?? 0)),
-      );
+      const partner = findPartner(spec, ov.bySlotId, ov.cycleDelta ?? 0);
       if (partner === undefined) continue;
       const i = me.indexOf.get(ov.atStationId)!;
       const j = partner.indexOf.get(ov.atStationId)!;

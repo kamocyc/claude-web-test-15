@@ -23,6 +23,8 @@ export interface TrainSpec {
   bandName: string;
   slotId: string;
   cycleIndex: number;
+  /** Absolute clock time at which this train's cycle begins. */
+  cycleStartSec: Sec;
   slot: PatternSlot;
   cycleSec: number;
   /** Departure from the origin. */
@@ -66,7 +68,10 @@ export function expandBands(
       if (cycleStart >= band.toSec) break;
       for (const slot of pattern.slots) {
         const departureSec = cycleStart + slot.offsetSec;
-        if (departureSec >= band.toSec) continue;
+        // The band window is tested against the slot's position in the CYCLE,
+        // which is not always where it leaves its origin — see
+        // `PatternSlot.windowOffsetSec`.
+        if (cycleStart + (slot.windowOffsetSec ?? slot.offsetSec) >= band.toSec) continue;
         out.push({
           key: specKey(band.id, slot.id, k),
           trainId: nextTrainId(),
@@ -74,6 +79,7 @@ export function expandBands(
           bandName: band.name,
           slotId: slot.id,
           cycleIndex: k,
+          cycleStartSec: cycleStart,
           slot,
           cycleSec: pattern.cycleSec,
           departureSec,

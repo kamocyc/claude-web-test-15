@@ -134,8 +134,12 @@ export class TrackBooking {
 
     for (const ev of events) {
       const stationId = train.stops[ev.stopIndex]!.stationId;
-      const isIntermediate = ev.stopIndex > 0 && ev.stopIndex < train.stops.length - 1;
-      if (isIntermediate && !this.headwayOk(stationId, train.direction, ev.t0, minHeadwaySec)) {
+      // Both instants matter: the arrival is a link EXIT and the departure a
+      // link ENTRY, and `headway.section` checks the two sequences separately.
+      if (
+        !this.headwayOk(stationId, train.direction, ev.t0, minHeadwaySec) ||
+        !this.headwayOk(stationId, train.direction, ev.t1, minHeadwaySec)
+      ) {
         return false;
       }
       const track = this.pick(stationId, ev, booked);

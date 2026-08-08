@@ -1,30 +1,61 @@
 /**
  * The weekday service plan: eight time bands, each with one repeating cycle.
  *
- * The band boundaries, cycle lengths and the mix inside each cycle come from
- * the researched operating pattern:
+ *   05:00–06:30 早朝     20分周期  各停のみ、鷺沼発着の青各停を含む
+ *   06:30–07:30 立上り   15分周期  急行運転開始 (8本/時)
+ *   07:30–09:00 朝ラッシュ 15分周期  上り20本/時・下り16本/時
+ *   09:00–10:00 逓減     15分周期  12本/時
+ *   10:00–16:00 日中     15分周期  急行1+各停3 = 16本/時
+ *   16:00–20:00 夕ラッシュ 15分周期  16本/時、急行は鷺沼まで直通
+ *   20:00–23:00 夜間     15分周期  日中パターンに復帰
+ *   23:00–24:30 深夜     20分周期  終列車、溝の口引上線から入庫
  *
- *   05:00–06:30 早朝     20分サイクル  各停のみ、鷺沼発着の青各停を含む
- *   06:30–07:30 立上り   15分サイクル  急行運転開始
- *   07:30–09:00 朝ラッシュ 9分サイクル  上り優位・20本/時、各停は全て待避
- *   09:00–10:00 逓減     15分サイクル  12本/時
- *   10:00–16:00 日中     15分サイクル  急行1+各停3 = 16本/時
- *   16:00–20:00 夕ラッシュ 12分サイクル 下り優位・20本/時、急行は鷺沼まで直通
- *   20:00–23:00 夜間     15分サイクル  日中パターンに復帰
- *   23:00–24:30 深夜     20分サイクル  終列車、溝の口引上線から入庫
+ * ===========================================================================
+ * Two structural findings that shaped this file — both of them consequences of
+ * the researched infrastructure, not of the numbers chosen here
+ * ===========================================================================
  *
- * On the 朝ラッシュ cycle: the *published* interval is 3 minutes, but a
- * 3-second… a 3-*minute* cycle cannot carry a 急行+各停×2 mix, because the mix
- * itself is three trains long. We therefore model it as a 9-minute cycle
- * containing three trains per direction, which is exactly 20 trains/hour and
- * an average 3-minute headway. Same for 夕ラッシュ: a 12-minute cycle with
- * four trains per direction = 20/hour.
+ * **1. One 待避線 per direction caps the line at 16 本/時 wherever an 急行 runs.**
+ * An 急行 covers 大井町〜溝の口 about 350 s faster than a 緑各停 and 430 s faster
+ * than a 青各停. Between 大井町 and 旗の台 (km 0.0–3.1) there is no passing
+ * track at all, so an 急行 must still be *behind* every 各停 it has not yet
+ * passed when it reaches 旗の台 — and it can stand exactly one of them aside
+ * there per cycle. Any other 各停 therefore has to be far enough ahead to stay
+ * ahead for the whole run: ≥ 350 + 90 s of headway for a 緑, ≥ 430 + 90 for a
+ * 青. Four trains in a 15-minute cycle satisfies that. Five does not, in either
+ * direction, unless a second passing track exists.
  *
- * Offsets are a reconstruction, tuned so that (a) no two same-direction trains
- * are closer than the 90 s link headway anywhere on the line, and (b) every
- * declared 待避 has at least ~30 s of slack on the arrival side. They are all
- * multiples of 10 s, which keeps every computed time on the 5-second grain
- * without any rounding.
+ * **2. 上り can do 20 本/時 in the morning because it has a second one.**
+ * 上野毛's passing loop is 上り-only, so the 朝ラッシュ 上り — and only the 上り
+ * — can carry a fifth train per cycle, standing one 各停 aside at 旗の台 and a
+ * second at 上野毛 for the same 急行. The 下り peak, morning or evening, cannot:
+ * the 夕ラッシュ therefore tightens by running 7-car 急行 through onto the
+ * 田園都市線 rather than by running more trains. That asymmetry is a real
+ * property of the 大井町線 and the model reproduces it rather than papering
+ * over it.
+ *
+ * ===========================================================================
+ * The 15-minute grid
+ * ===========================================================================
+ *
+ * Every band from 立上り to 夜間 uses the SAME 900-second cycle and the same
+ * slot offsets, and every band boundary falls on a multiple of 900 s from
+ * 06:30. Bands differ only in which slots they populate. That is what keeps the
+ * transitions clean: a band never has to re-phase, so no train from the
+ * outgoing pattern can arrive inside the incoming one's headway.
+ *
+ *   下り  d1 緑 +0:00 (旗の台で待避)   d2 急 +4:10   d3 青 +7:30   d4 緑 +11:00
+ *   上り  u1 緑 +0:00 (旗の台で待避)   u2 急 +5:00   u3 青 +8:00   u4 緑 +11:00
+ *                                      u5 緑 +13:20 (上野毛で待避、朝のみ)
+ *
+ * The 急行 leaves four to five minutes behind the 各停 it will overtake — far
+ * enough that it is still 100 s behind on arrival at 旗の台, which is where the
+ * only 待避線 in that direction is. Offsets are all multiples of 10 s, so every
+ * computed time lands on the 5-second grain with no rounding.
+ *
+ * Everything in this file is a reconstruction. The band boundaries, the cycle
+ * lengths and the mix inside a cycle follow the researched pattern; the exact
+ * offsets do not come from any published timetable.
  */
 
 import type { Direction } from '@/domain/model';
@@ -39,6 +70,7 @@ const M = SEC_PER_MIN;
 interface SlotDef {
   id: string;
   offsetSec: number;
+  windowOffsetSec?: number;
   patternKey: PatternKey;
   overtakes?: Array<{ at: StationKey; by: string; cycleDelta?: number }>;
   connectsWith?: Array<{ at: StationKey; withSlot: string; cycleDelta?: number }>;
@@ -68,8 +100,23 @@ function waitFor(at: StationKey, by: string, cycleDelta?: number): Pick<SlotDef,
 
 const THROUGH_NOTE = '田園都市線直通 長津田行き（本モデルでは鷺沼止まり）';
 
+/** The shared 15-minute grid. Bands pick a subset of these slots. */
+const GRID = {
+  d1: 0,
+  d2: 250,
+  d3: 450,
+  d4: 660,
+  u1: 0,
+  u2: 300,
+  u3: 480,
+  u4: 660,
+  u5: 800,
+} as const;
+
 const BAND_DEFS: readonly BandDef[] = [
   // -------------------------------------------------------------- 早朝
+  // Off-grid: a 20-minute cycle, but nothing overtakes and the band ends far
+  // enough before 06:30 that it cannot interfere with 立上り.
   {
     id: 'b1-early',
     name: '早朝',
@@ -80,9 +127,9 @@ const BAND_DEFS: readonly BandDef[] = [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown' },
       { id: 'd2', offsetSec: 10 * M, patternKey: 'blueDownSaginuma' },
       { id: 'u1', offsetSec: 0, patternKey: 'greenUp' },
-      // Leaves 鷺沼 8 minutes into the cycle and is on the 溝の口 clock at
-      // +15:40, comfortably clear of the next 緑各停.
-      { id: 'u2', offsetSec: 8 * M, patternKey: 'blueUpSaginuma' },
+      // Leaves 鷺沼 eight minutes into the cycle; on the 溝の口 clock that is
+      // +15:40, so the band window is measured there rather than at 鷺沼.
+      { id: 'u2', offsetSec: 8 * M, windowOffsetSec: 940, patternKey: 'blueUpSaginuma' },
     ],
   },
   // -------------------------------------------------------------- 立上り
@@ -93,10 +140,10 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 7 * H + 30 * M,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
-      { id: 'u2', offsetSec: 300, patternKey: 'expressUp' },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
+      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
+      { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
     ],
   },
   // -------------------------------------------------------------- 朝ラッシュ
@@ -105,23 +152,37 @@ const BAND_DEFS: readonly BandDef[] = [
     name: '朝ラッシュ',
     fromSec: 7 * H + 30 * M,
     toSec: 9 * H,
-    cycleSec: 9 * M,
+    cycleSec: 15 * M,
     slots: [
-      // 下り is the counter-peak, and it is *capacity limited by the layout*:
-      // with only one 待避線 per direction at 旗の台 an 急行 can stand aside
-      // exactly one 各停 per cycle, and an 急行 gains ~350 s on a 緑各停 over
-      // the 12.4 km, so any 各停 departing less than ~440 s ahead of it also
-      // has to be overtaken. Three trains in a 9-minute cycle would need two
-      // 待避 in the 下り, which the line simply cannot do. Two it is —
-      // 13.3 本/時, which is what the real counter-peak looks like.
-      { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
-      // 上り is the peak, and it has TWO 待避 points — 旗の台 and the
-      // 上り-only loop at 上野毛 — so it can carry the full 20 本/時 with both
-      // 各停 standing aside for the same 急行.
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u3') },
-      { id: 'u2', offsetSec: 180, patternKey: 'blueUp', ...waitFor('kaminoge', 'u3') },
-      { id: 'u3', offsetSec: 360, patternKey: 'expressUp' },
+      // 下り, the counter-peak, is the full grid: 16 本/時, the most one
+      // 待避線 allows.
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
+      // 上り, the peak, adds a fifth train — 20 本/時, a 3-minute average
+      // headway — paid for by the 上り-only loop at 上野毛. u1 stands aside at
+      // 旗の台 for this cycle's 急行; u5 stands aside at 上野毛 for the next
+      // one, which is why it carries `cycleDelta: 1`.
+      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
+      { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
+      { id: 'u3', offsetSec: GRID.u3, patternKey: 'blueUp' },
+      { id: 'u4', offsetSec: GRID.u4, patternKey: 'greenUp' },
+      // u5 stands aside at 上野毛 for over eight minutes, which is long enough
+      // that the NEXT cycle's u1 — an ordinary 各停 that does not wait here —
+      // also goes past it. That is a perfectly legal second overtake on a
+      // legal 待避線, so it is declared too. No 緩急接続 goes with it: the two
+      // trains are the same product, so there is nothing to transfer to.
+      {
+        id: 'u5',
+        offsetSec: GRID.u5,
+        patternKey: 'greenUp',
+        overtakes: [
+          { at: 'kaminoge', by: 'u2', cycleDelta: 1 },
+          { at: 'kaminoge', by: 'u1', cycleDelta: 1 },
+        ],
+        connectsWith: [{ at: 'kaminoge', withSlot: 'u2', cycleDelta: 1 }],
+      },
     ],
   },
   // -------------------------------------------------------------- 逓減
@@ -132,12 +193,12 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 10 * H,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: 480, patternKey: 'blueDown' },
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
-      { id: 'u2', offsetSec: 300, patternKey: 'expressUp' },
-      { id: 'u3', offsetSec: 540, patternKey: 'blueUp' },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
+      { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
+      { id: 'u3', offsetSec: GRID.u3, patternKey: 'blueUp' },
     ],
   },
   // -------------------------------------------------------------- 日中
@@ -148,14 +209,14 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 16 * H,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: 450, patternKey: 'blueDown' },
-      { id: 'd4', offsetSec: 660, patternKey: 'greenDown' },
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
-      { id: 'u2', offsetSec: 300, patternKey: 'expressUp' },
-      { id: 'u3', offsetSec: 480, patternKey: 'blueUp' },
-      { id: 'u4', offsetSec: 690, patternKey: 'greenUp' },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
+      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
+      { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
+      { id: 'u3', offsetSec: GRID.u3, patternKey: 'blueUp' },
+      { id: 'u4', offsetSec: GRID.u4, patternKey: 'greenUp' },
     ],
   },
   // -------------------------------------------------------------- 夕ラッシュ
@@ -166,23 +227,25 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 20 * H,
     cycleSec: 15 * M,
     slots: [
-      // Peak direction is 下り — and 下り has only the one 待避線, so the
-      // evening peak cannot be denser than the daytime 16 本/時 (see the note
-      // on 朝ラッシュ). What tightens is the *product*, not the interval: the
-      // 急行 runs through onto the 田園都市線, seven cars deep.
-      { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 250, patternKey: 'expressDownSaginuma', note: THROUGH_NOTE },
-      { id: 'd3', offsetSec: 450, patternKey: 'blueDown' },
-      { id: 'd4', offsetSec: 660, patternKey: 'greenDown' },
-      // u2 starts at 鷺沼, 490 s further out than the 溝の口 slots, so its
-      // offset is shifted round by one cycle (900 − 490 + 300 = 710) to put it
-      // on the 溝の口 clock at +300. The 各停 it stands aside at 旗の台 is
-      // therefore the NEXT cycle's u1 — which is what `cycleDelta: -1` says
-      // when read from that 各停's side.
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2', -1) },
-      { id: 'u2', offsetSec: 710, patternKey: 'expressUpSaginuma', note: THROUGH_NOTE },
-      { id: 'u3', offsetSec: 480, patternKey: 'blueUp' },
-      { id: 'u4', offsetSec: 690, patternKey: 'greenUp' },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDownSaginuma', note: THROUGH_NOTE },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
+      // u2 starts at 鷺沼, 490 s further out than the 溝の口 slots, so it leaves
+      // one cycle earlier (900 − 490 + 300 = 710) to land on the grid at +5:00.
+      // Read from u1's side that makes the 急行 that passes it the PREVIOUS
+      // cycle's u2 — hence `cycleDelta: -1`. The very first cycle of the band
+      // has no such 急行 and simply runs clear.
+      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2', -1) },
+      {
+        id: 'u2',
+        offsetSec: 710,
+        windowOffsetSec: 1200,
+        patternKey: 'expressUpSaginuma',
+        note: THROUGH_NOTE,
+      },
+      { id: 'u3', offsetSec: GRID.u3, patternKey: 'blueUp' },
+      { id: 'u4', offsetSec: GRID.u4, patternKey: 'greenUp' },
     ],
   },
   // -------------------------------------------------------------- 夜間
@@ -193,14 +256,14 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 23 * H,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: 0, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
-      { id: 'd2', offsetSec: 250, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: 450, patternKey: 'blueDown' },
-      { id: 'd4', offsetSec: 660, patternKey: 'greenDown' },
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
-      { id: 'u2', offsetSec: 300, patternKey: 'expressUp' },
-      { id: 'u3', offsetSec: 480, patternKey: 'blueUp' },
-      { id: 'u4', offsetSec: 690, patternKey: 'greenUp' },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
+      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
+      { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
+      { id: 'u3', offsetSec: GRID.u3, patternKey: 'blueUp' },
+      { id: 'u4', offsetSec: GRID.u4, patternKey: 'greenUp' },
     ],
   },
   // -------------------------------------------------------------- 深夜
@@ -256,6 +319,7 @@ export function buildServicePlan(facts: Facts): ServicePlan {
         terminusStationId: facts.S[spec.terminusKey],
         numbering: numberingFor(bandIndex, slotIndex, spec.direction),
         cars,
+        ...(def.windowOffsetSec === undefined ? {} : { windowOffsetSec: def.windowOffsetSec }),
         ...(def.note === undefined ? {} : { note: def.note }),
       };
       if (def.overtakes !== undefined) {

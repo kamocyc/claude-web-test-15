@@ -191,15 +191,6 @@ interface TrackSpec {
 }
 
 const MAIN = { approachSec: 30, clearSec: 20 } as const;
-/**
- * 大井町 only. A 頭端式 terminal is approached at crawl speed over a short
- * final block and cleared as soon as the train is at a stand, so the berth is
- * booked for much less time than at a through platform. With only two roads and
- * ~40 movements an hour at peak this is the difference between a workable
- * 構内ダイヤ and an impossible one — which is precisely why the real 大井町 is
- * the capacity ceiling of the whole line.
- */
-const STUB = { approachSec: 20, clearSec: 10 } as const;
 const WAIT = { approachSec: 45, clearSec: 30 } as const;
 const THRU = { approachSec: 20, clearSec: 15 } as const;
 const YARD = { approachSec: 60, clearSec: 60 } as const;
@@ -231,8 +222,8 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
       // 頭端式1面2線. Both faces of a single island; a train reverses in place,
       // there is no tail track, and that is exactly why 大井町 is the bottleneck.
       return [
-        omPlatform('1番線', 1, ['down', 'up'], { canTurnBack: true, ...STUB }),
-        omPlatform('2番線', 2, ['down', 'up'], { canTurnBack: true, ...STUB }),
+        omPlatform('1番線', 1, ['down', 'up'], { canTurnBack: true }),
+        omPlatform('2番線', 2, ['down', 'up'], { canTurnBack: true }),
       ];
     case 'double':
       return [omPlatform('1番線', 1, ['down']), omPlatform('2番線', 2, ['up'])];

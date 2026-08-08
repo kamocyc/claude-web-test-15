@@ -54,6 +54,7 @@ function main(): void {
     lines.push(`  帯端で不成立      ${report.skippedOvertakesAtBandEdge}`);
     lines.push(`  最大待避時分      ${Math.round(report.maxOvertakeWaitSec / 60)}分`);
     lines.push(`  既定番線からの変更 ${report.trackFallbacks}`);
+    lines.push(`  回送の筋ずらし最大 ${Math.round(report.maxDepotShiftSec / 60)}分`);
     lines.push(
       `  車庫留置最大      ${report.depotPeakStabled}${report.depotCapacityExceeded ? ' ** 収容能力超過 **' : ''}`,
     );
