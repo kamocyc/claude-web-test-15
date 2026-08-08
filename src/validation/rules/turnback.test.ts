@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { asId } from '@/domain/ids';
 import { TOY, toyProject, toyProjectCopy } from '@/testing/toyProject';
 import { expectIssue, idsFor, issuesFor } from '../testkit';
 
@@ -85,6 +86,34 @@ describe('turnback.trackNotCapable', () => {
 describe('turnback.trackChanged', () => {
   it('does not fire on the clean fixture (101 and 回8002 both use D 1番線)', () => {
     expect(issuesFor(toyProject(), 'turnback.trackChanged')).toEqual([]);
+  });
+
+  it('also catches a hand-over between two legs running the SAME way', () => {
+    // Not a reversal, so the 折り返し timing rules rightly ignore it — but the
+    // formation still has to be standing on the road it departs from. This
+    // used to be skipped entirely, which let a 回送 arriving from beyond a
+    // terminus and continuing onward change road with nothing to catch it.
+    const doc = toyProjectCopy();
+    const inbound = doc.trains.byId[TOY.depotIn]!;
+    // Make 回8002 terminate at A rather than running through to the depot, and
+    // have a second down train continue from A on a different road.
+    inbound.stops = inbound.stops.slice(0, -1);
+    const onward = structuredClone(doc.trains.byId[TOY.localDown]!);
+    onward.id = asId<'Train'>('trn-90');
+    onward.number = '190';
+    onward.direction = 'up';
+    onward.stops = [
+      { stationId: TOY.stationA, trackId: TOY.a1, dep: 8 * 3600 + 40 * 60, kind: 'stop' },
+      { stationId: TOY.stationB, trackId: TOY.b1, arr: 8 * 3600 + 42 * 60, kind: 'stop' },
+    ];
+    doc.trains.byId[onward.id] = onward;
+    doc.trains.allIds.push(onward.id);
+    doc.duties.byId[TOY.dutyLocal]!.legs.push({ kind: 'train', trainId: onward.id });
+
+    const issues = issuesFor(doc, 'turnback.trackChanged');
+    // 回8002 arrives A on 2番線; 190 departs A on 1番線, same direction.
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.detail).toContain('A駅');
   });
 
   it('errors where the station has no siding to shunt through', () => {

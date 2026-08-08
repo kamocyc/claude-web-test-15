@@ -25,12 +25,29 @@ export interface TurnbackPair {
   requiredSec: number;
   /** Roads named by `stable` legs sitting between the two train legs. */
   viaTrackIds: StationTrackId[];
+  /**
+   * True when the formation actually reverses. A hand-over between two legs
+   * running the SAME way — a 回送 arriving from beyond the terminus and then
+   * departing onward, for instance — is not a reversal and so is not held to
+   * the station's 折り返し time. It still has to be standing on the road it
+   * departs from, though, which is why `turnback.trackChanged` looks at every
+   * pair and the timing rules look only at reversals.
+   */
+  isReversal: boolean;
 }
 
 /**
- * Consecutive *train* legs of one duty that meet at the same station facing
- * opposite ways. Intervening `stable` legs are skipped: the reversal still has
- * to happen, and it still needs the station's minimum turnback time.
+ * Consecutive *train* legs of one duty that meet at the same station.
+ *
+ * Most are reversals, and those are held to the station's minimum turnback
+ * time. A pair running the same way is not a reversal — a 回送 arriving from
+ * beyond the terminus and continuing onward, say — but the formation still has
+ * to be standing on the road it departs from, so the pair is returned with
+ * `isReversal: false` and only the track-continuity rule looks at it. Skipping
+ * these entirely, as this function used to, left same-direction hand-overs
+ * changing road with nothing to catch them.
+ *
+ * Intervening `stable` legs are skipped: the reversal still has to happen.
  */
 export function turnbackPairs(ctx: ValidationContext): TurnbackPair[] {
   const dayTypeId = dayTypeIdFor(ctx.doc, ctx.idx.date);
@@ -50,7 +67,7 @@ export function turnbackPairs(ctx: ValidationContext): TurnbackPair[] {
       const first = departing.stops[0];
       if (!last || !first) continue;
       if (last.stationId !== first.stationId) continue;
-      if (arriving.direction === departing.direction) continue;
+      const isReversal = arriving.direction !== departing.direction;
       const arrSec = trainEndSec(arriving);
       const depSec = trainStartSec(departing);
       if (arrSec === undefined || depSec === undefined) continue;
@@ -66,6 +83,7 @@ export function turnbackPairs(ctx: ValidationContext): TurnbackPair[] {
         duty,
         legIndex: cur.legIndex,
         viaTrackIds,
+        isReversal,
         arriving,
         departing,
         stationId: last.stationId,
@@ -87,6 +105,7 @@ export const turnbackInsufficient: Rule = {
   run(ctx) {
     const out: Issue[] = [];
     for (const p of turnbackPairs(ctx)) {
+      if (!p.isReversal) continue;
       if (p.availableSec >= p.requiredSec) continue;
       out.push({
         id: issueId('turnback.insufficient', p.duty.id, p.arriving.id, p.departing.id),
@@ -116,6 +135,7 @@ export const turnbackTight: Rule = {
   run(ctx) {
     const out: Issue[] = [];
     for (const p of turnbackPairs(ctx)) {
+      if (!p.isReversal) continue;
       if (p.availableSec < p.requiredSec) continue; // insufficient covers it
       if (p.availableSec >= ctx.cfg.preferredTurnbackSec) continue;
       out.push({
@@ -223,6 +243,8 @@ export const turnbackTrackNotCapable: Rule = {
   run(ctx) {
     const out: Issue[] = [];
     for (const p of turnbackPairs(ctx)) {
+      // Only a reversal needs a road that can actually turn a train.
+      if (!p.isReversal) continue;
       const arrivingTrackId = p.arriving.stops[p.arriving.stops.length - 1]?.trackId;
       const departingTrackId = p.departing.stops[0]?.trackId;
       for (const [trackId, who] of [
