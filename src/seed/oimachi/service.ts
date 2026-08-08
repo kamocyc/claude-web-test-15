@@ -107,12 +107,12 @@ const THROUGH_NOTE = '田園都市線直通 長津田行き（本モデルでは
 const GRID = {
   d1: 0,
   d2: 250,
-  d3: 450,
-  d4: 660,
-  u1: 430,
-  u2: 730,
-  u3: 120,
-  u4: 850,
+  d3: 440,
+  d4: 640,
+  u1: 210,
+  u2: 510,
+  u3: 740,
+  u4: 610,
 } as const;
 
 const BAND_DEFS: readonly BandDef[] = [
@@ -128,10 +128,11 @@ const BAND_DEFS: readonly BandDef[] = [
     slots: [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown' },
       { id: 'd2', offsetSec: 10 * M, patternKey: 'blueDownSaginuma' },
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp' },
-      // Leaves 鷺沼 eight minutes into the cycle; on the 溝の口 clock that is
-      // +15:40, so the band window is measured there rather than at 鷺沼.
-      { id: 'u2', offsetSec: 8 * M, windowOffsetSec: 940, patternKey: 'blueUpSaginuma' },
+      // The 上り offsets are set by the 大井町 turnback, not by symmetry: each
+      // arrival has to land a turnback time before a 下り departure, because
+      // the stub terminal has nowhere to park anything that does not.
+      { id: 'u1', offsetSec: 465, patternKey: 'greenUp' },
+      { id: 'u2', offsetSec: 1005, windowOffsetSec: 1005 + SAGINUMA_LEAD_SEC, patternKey: 'blueUpSaginuma' },
     ],
   },
   // -------------------------------------------------------------- 立上り
@@ -142,6 +143,8 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 7 * H + 30 * M,
     cycleSec: 15 * M,
     slots: [
+      // 立上り runs 各停(緑) + 急行 only: with no 青各停 in the 上り there would be
+      // nothing at 大井町 for a 青 to turn back into.
       { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
       { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
       { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
@@ -158,9 +161,9 @@ const BAND_DEFS: readonly BandDef[] = [
     slots: [
       // 下り, the counter-peak, is the full grid: 16 本/時, the most one
       // 待避線 allows.
-      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'blueDown', ...waitFor('hatanodai', 'd2') },
       { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'greenDown' },
       { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
       // 上り, the peak, adds a fifth train — 20 本/時, a 3-minute average
       // headway — paid for by the 上り-only loop at 上野毛. u1 stands aside at
@@ -180,9 +183,9 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 10 * H,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'blueDown', ...waitFor('hatanodai', 'd2') },
       { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'greenDown' },
       { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
       { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
       { id: 'u3', offsetSec: GRID.u3, patternKey: 'blueUp' },
@@ -196,9 +199,9 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 16 * H,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'blueDown', ...waitFor('hatanodai', 'd2') },
       { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'greenDown' },
       { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
       { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
       { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
@@ -214,9 +217,9 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 20 * H,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'blueDown', ...waitFor('hatanodai', 'd2') },
       { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDownSaginuma', note: THROUGH_NOTE },
-      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'greenDown' },
       { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
       // u2 starts at 鷺沼, 490 s further out than the 溝の口 slots, so it leaves
       // one cycle earlier (900 − 490 + 300 = 710) to land on the grid at +5:00.
@@ -243,9 +246,9 @@ const BAND_DEFS: readonly BandDef[] = [
     toSec: 23 * H,
     cycleSec: 15 * M,
     slots: [
-      { id: 'd1', offsetSec: GRID.d1, patternKey: 'greenDown', ...waitFor('hatanodai', 'd2') },
+      { id: 'd1', offsetSec: GRID.d1, patternKey: 'blueDown', ...waitFor('hatanodai', 'd2') },
       { id: 'd2', offsetSec: GRID.d2, patternKey: 'expressDown' },
-      { id: 'd3', offsetSec: GRID.d3, patternKey: 'blueDown' },
+      { id: 'd3', offsetSec: GRID.d3, patternKey: 'greenDown' },
       { id: 'd4', offsetSec: GRID.d4, patternKey: 'greenDown' },
       { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
       { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
@@ -263,8 +266,8 @@ const BAND_DEFS: readonly BandDef[] = [
     slots: [
       { id: 'd1', offsetSec: 0, patternKey: 'greenDown' },
       { id: 'd2', offsetSec: 10 * M, patternKey: 'blueDownSaginuma' },
-      { id: 'u1', offsetSec: 0, patternKey: 'greenUp' },
-      { id: 'u2', offsetSec: 10 * M, patternKey: 'blueUp' },
+      { id: 'u1', offsetSec: 525, patternKey: 'greenUp' },
+      { id: 'u2', offsetSec: 1045, patternKey: 'blueUp' },
     ],
   },
 ];

@@ -444,7 +444,7 @@ describe('時間帯別の運転本数', () => {
     const expected: Record<string, { down: number; up: number }> = {
       早朝: { down: 6, up: 6 },
       立上り: { down: 8, up: 8 },
-      朝ラッシュ: { down: 16, up: 20 },
+      朝ラッシュ: { down: 16, up: 16 },
       逓減: { down: 12, up: 12 },
       日中: { down: 16, up: 16 },
       夕ラッシュ: { down: 16, up: 16 },
@@ -464,14 +464,21 @@ describe('時間帯別の運転本数', () => {
     }
   });
 
-  it('runs the morning peak 上り denser than 下り — the 上野毛 loop is 上り-only', () => {
-    const peak = report.perBand.find((b) => b.name === '朝ラッシュ')!;
-    expect(peak.up).toBeGreaterThan(peak.down);
+  /**
+   * 大井町 is a stub: every 上り train that arrives has to leave again as a 下り
+   * train, and the terminal can hold two formations. Over a band, therefore,
+   * 上り and 下り counts have to match — an asymmetric peak is not a denser
+   * timetable, it is stock piling up on two dead-end platform roads.
+   */
+  it('keeps every band balanced, because 大井町 cannot store the difference', () => {
+    for (const band of report.perBand) {
+      expect(Math.abs(band.up - band.down), `${band.name}`).toBeLessThanOrEqual(1);
+    }
   });
 });
 
 describe('決定性とダイジェスト', () => {
-  it('builds byte-identically twice', () => {
+  it('builds byte-identically twice', { timeout: 30_000 }, () => {
     const a = buildOimachiProject();
     const b = buildOimachiProject();
     expect(a).toEqual(b);

@@ -88,15 +88,13 @@ describe('日中パターン単体 — 15分サイクル', () => {
   });
 });
 
-describe('朝ラッシュ — 上りは2箇所で待避', () => {
+describe('朝ラッシュ — 待避は旗の台', () => {
   const { band, pattern } = bandNamed('朝ラッシュ');
   const result = buildStopTimes(facts, expandBands([band], [pattern], ids()));
 
-  it('stands one 各停 aside at 旗の台 and another at 上野毛 for the same 急行', () => {
+  it('stands the 各停 ahead of the 急行 aside at 旗の台', () => {
     const atHatanodai = result.trains.get('b3-ampeak:u1:2')!;
-    const atKaminoge = result.trains.get('b3-ampeak:u5:2')!;
     expect(atHatanodai.extraDwell.has(facts.S.hatanodai)).toBe(true);
-    expect(atKaminoge.extraDwell.has(facts.S.kaminoge)).toBe(true);
     expect(atHatanodai.overtakenBy.get(facts.S.hatanodai)).toHaveLength(1);
   });
 

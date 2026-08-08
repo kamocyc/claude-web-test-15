@@ -79,6 +79,26 @@ export interface AssignableTrain {
   pinnedOrigin?: PinnedEnd;
   /** This train's terminus shares a road with the train that leaves next. */
   pinnedTerminus?: PinnedEnd;
+  /**
+   * Seconds of road this train needs BEFORE its origin departure, because the
+   * 出庫回送 that brings the stock in has to stand there first. Reserving it
+   * during the service sweep is what lets the empty move be pinned to the same
+   * road afterwards; without it the sweep fills the road and the 回送 has
+   * nowhere to reverse at a stub terminal.
+   */
+  reserveBeforeOriginSec?: number;
+  /** The mirror image: road held after the terminus until the 入庫 leaves. */
+  reserveAfterTerminusSec?: number;
+  /**
+   * Absolute instant until which this train's terminus road stays occupied —
+   * used by a 出庫 that could not be pinned to its service train's road but
+   * must still stand somewhere until that train leaves. Unlike a reservation
+   * this is a hard requirement: a path that does not keep the road is not a
+   * path the formation could actually work.
+   */
+  holdTerminusUntilSec?: Sec;
+  /** The mirror image for an 入庫 taking over from an arriving train. */
+  holdOriginFromSec?: Sec;
 }
 
 /** Two service trains of one duty reversing in place at the same station. */
@@ -109,6 +129,12 @@ interface Event {
   forcedTrackId?: StationTrackId;
   /** Interval owner this event is allowed to overlap: the same formation. */
   exemptTrainId?: TrainId;
+  /**
+   * Extra road time this event would LIKE, for the 出庫/入庫 that brings the
+   * stock in or takes it away. Booked in a second pass so that a reservation
+   * can never crowd out a train that actually has to be somewhere.
+   */
+  wanted?: { from: Sec; to: Sec };
 }
 
 interface Occupied {
@@ -205,6 +231,8 @@ export class TrackBooking {
           a.occFrom - b.occFrom ||
           a.targets[0]!.train.trainId.localeCompare(b.targets[0]!.train.trainId),
       );
+      // Pass 1: every train gets the road it actually needs.
+      const placed: Array<{ ev: Event; track: StationTrack }> = [];
       for (const ev of events) {
         const chosen = this.pick(station.id, ev);
         if (chosen === undefined) {
@@ -215,8 +243,45 @@ export class TrackBooking {
           });
         }
         this.commit(station.id, ev, chosen);
+        placed.push({ ev, track: chosen });
+      }
+      // Pass 2: chain ends take the extra road time their empty move needs, if
+      // and only if nothing else wants it. A reservation that cannot be had is
+      // not an error — the 回送 will shunt to another road and the duty will
+      // carry a `stable` leg saying so.
+      for (const { ev, track } of placed) {
+        if (ev.wanted === undefined) continue;
+        this.extendBooking(
+          track.id,
+          ev.targets[0]!.train.trainId,
+          ev.wanted.from,
+          ev.wanted.to,
+        );
       }
     }
+  }
+
+  /**
+   * Hold a road the same formation is already using, for longer.
+   *
+   * Used when a `stable` leg berths a formation on the road its own empty move
+   * arrived at or leaves from: the road is right, the window is not, and the
+   * existing interval belongs to the same formation so it is not a conflict.
+   * Returns false if somebody else needs the road in that window.
+   */
+  extendBooking(trackId: StationTrackId, trainId: TrainId, from: Sec, to: Sec): boolean {
+    const track = this.facts.tracks.find((t) => t.id === trackId);
+    if (track === undefined) return false;
+    const slotFrom = from - track.approachSec;
+    const slotTo = to + track.clearSec;
+    const busy = this.occupancy.get(trackId) ?? [];
+    for (const slot of busy) {
+      if (slot.trainId === trainId) continue;
+      if (intervalsOverlap(slotFrom, slotTo, slot.from, slot.to)) return false;
+    }
+    busy.push({ from: slotFrom, to: slotTo, trainId });
+    this.occupancy.set(trackId, busy);
+    return true;
   }
 
   /**
@@ -233,12 +298,22 @@ export class TrackBooking {
     stationId: StationId,
     trainId: TrainId,
     cars: number,
+    routing: Routing,
     from: Sec,
     to: Sec,
   ): StationTrackId | undefined {
     const tracks = this.facts.tracksOf.get(stationId) ?? [];
+    const stationKey = this.facts.keyOf.get(stationId);
+    const inQuad = stationKey !== undefined && QUAD_SECTION.includes(stationKey);
     const ranked = [...tracks]
-      .filter((t) => t.maxCars >= cars && t.canTurnBack)
+      .filter((t) => {
+        if (t.maxCars < cars || !t.canTurnBack) return false;
+        if (!inQuad) return true;
+        const role = this.facts.trackRole.get(t.id);
+        // The 溝の口 引上線 lie beyond the 大井町線 faces; a 田園都市線 train
+        // cannot reach them without crossing the through roads.
+        return role === routing || (role === 'stabling' && routing === 'om');
+      })
       .sort((a, b) => berthScore(this.facts, a) - berthScore(this.facts, b));
     for (const track of ranked) {
       const slotFrom = from - track.approachSec;
@@ -391,10 +466,18 @@ function eventOf(
   if (t0 === undefined || t1 === undefined) {
     throw new SeedError('番線割当: 時刻のない停車があります', { train: train.label });
   }
+  const last = train.stops.length - 1;
+  const before = stopIndex === 0 ? (train.reserveBeforeOriginSec ?? 0) : 0;
+  const after = stopIndex === last ? (train.reserveAfterTerminusSec ?? 0) : 0;
+  const holdFrom = stopIndex === 0 ? train.holdOriginFromSec : undefined;
+  const holdTo = stopIndex === last ? train.holdTerminusUntilSec : undefined;
   const ev: Event = {
     targets: [{ train, stopIndex }],
-    occFrom: t0,
-    occTo: t1,
+    occFrom: holdFrom === undefined ? t0 : Math.min(t0, holdFrom),
+    occTo: holdTo === undefined ? t1 : Math.max(t1, holdTo),
+    ...(before === 0 && after === 0
+      ? {}
+      : { wanted: { from: t0 - before, to: t1 + after } }),
     headwayAt:
       t0 === t1
         ? [{ at: t0, direction: train.direction }]
@@ -411,7 +494,7 @@ function eventOf(
   const pin =
     stopIndex === 0
       ? train.pinnedOrigin
-      : stopIndex === train.stops.length - 1
+      : stopIndex === last
         ? train.pinnedTerminus
         : undefined;
   if (pin !== undefined) {

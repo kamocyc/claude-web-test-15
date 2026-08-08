@@ -42,7 +42,7 @@ export const DEPOT_TURN_MARGIN_SEC = 300;
  * straight past every feasible path.
  */
 const SEARCH_STEP_SEC = 5;
-const SEARCH_STEPS = 900; // 75 minutes either side of the ideal
+const SEARCH_STEPS = 1200; // 100 minutes either side of the ideal
 /** 続行時隔 demanded of a 回送 against every already-placed train. */
 const DEADHEAD_HEADWAY_SEC = 95;
 
@@ -181,7 +181,7 @@ export function buildDepotRuns(
   const outNumber = ctx.nextNumber();
   const outDirection = directionOf(facts, outRoute);
 
-  const out = searchPath(ctx, {
+  const out = searchPathWithFallback(ctx, {
     trainId: outTrainId,
     number: outNumber,
     route: outRoute,
@@ -204,7 +204,14 @@ export function buildDepotRuns(
   const inTrainId = ctx.nextTrainId();
   const inNumber = ctx.nextNumber();
 
-  const inbound = searchPath(ctx, {
+  /**
+   * Pinning is a preference, not a law. When the road the last service train
+   * arrived on is wanted again before the empty move can leave, there is no
+   * shift that works, and the real answer is the one a yard would give: shunt
+   * the stock somewhere else first. The caller turns that into a `stable` leg
+   * on whatever road the unpinned attempt found.
+   */
+  const inbound = searchPathWithFallback(ctx, {
     trainId: inTrainId,
     number: inNumber,
     route: inRoute,
@@ -257,10 +264,49 @@ interface PathRequest {
   stepSign: -1 | 1;
   markFirst: TrainStop['operation'] | undefined;
   markLast: TrainStop['operation'] | undefined;
+  holdOriginFromSec?: Sec;
+  holdTerminusUntilSec?: Sec;
   note: string;
   preferStablingAtOrigin: boolean;
   pinnedOrigin?: PinnedEnd;
   pinnedTerminus?: PinnedEnd;
+}
+
+/** The unpinned retry still has to hold the road until the hand-over. */
+function unpinned(req: PathRequest): PathRequest {
+  const { pinnedOrigin, pinnedTerminus, ...rest } = req;
+  return {
+    ...rest,
+    preferStablingAtOrigin: true,
+    ...(pinnedTerminus === undefined ? {} : { holdTerminusUntilSec: pinnedTerminus.at }),
+    ...(pinnedOrigin === undefined ? {} : { holdOriginFromSec: pinnedOrigin.at }),
+  };
+}
+
+function searchPathWithFallback(
+  ctx: DepotRunContext,
+  req: PathRequest,
+): { train: Train; shiftSec: number } {
+  if (req.pinnedOrigin === undefined && req.pinnedTerminus === undefined) {
+    return searchPath(ctx, req);
+  }
+  // Three tiers, weakest assumption last: reverse on the service train's own
+  // road; failing that, take another road but hold it until the hand-over;
+  // failing that, just find a path and let the duty record the shunt.
+  try {
+    return searchPath(ctx, req);
+  } catch (err) {
+    if (!(err instanceof SeedError)) throw err;
+  }
+  try {
+    return searchPath(ctx, unpinned(req));
+  } catch (err) {
+    if (!(err instanceof SeedError)) throw err;
+  }
+  const loose = unpinned(req);
+  delete loose.holdOriginFromSec;
+  delete loose.holdTerminusUntilSec;
+  return searchPath(ctx, loose);
 }
 
 function searchPath(
@@ -283,6 +329,10 @@ function searchPath(
       stops,
       ...(req.pinnedOrigin === undefined ? {} : { pinnedOrigin: req.pinnedOrigin }),
       ...(req.pinnedTerminus === undefined ? {} : { pinnedTerminus: req.pinnedTerminus }),
+      ...(req.holdOriginFromSec === undefined ? {} : { holdOriginFromSec: req.holdOriginFromSec }),
+      ...(req.holdTerminusUntilSec === undefined
+        ? {}
+        : { holdTerminusUntilSec: req.holdTerminusUntilSec }),
     };
     if (!booking.tryPlace(candidate, DEADHEAD_HEADWAY_SEC)) continue;
     const train: Train = {
