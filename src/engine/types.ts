@@ -105,8 +105,14 @@ export interface ConnectionEvent {
   /** Seconds between `fromTrainId` arriving and `toTrainId` departing. */
   transferSec: number;
   declared: boolean;
-  /** Within [connectionMinTransferSec, connectionMaxWaitSec]. */
+  /** Within [connectionMinTransferSec, connectionMaxWaitSec], and boardable. */
   viable: boolean;
+  /**
+   * Why a *declared* pair is not a connection at all, as opposed to one whose
+   * transfer time is merely out of range. Only ever set on declared pairs: the
+   * discovery passes reject these before they become events.
+   */
+  blockedReason?: 'targetDoesNotStop' | 'targetNotFaster';
 }
 
 export interface TimetableIndex {

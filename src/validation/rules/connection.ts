@@ -7,6 +7,7 @@
  * every passenger on board.
  */
 
+import type { StationId } from '@/domain/ids';
 import { formatDuration } from '@/domain/time';
 import { hhmmss, orderedTimelines, stationName, trainName } from '../helpers';
 import { issueId, type Issue, type Rule } from '../types';
@@ -44,6 +45,23 @@ export const connectionDeclaredFails: Rule = {
             continue;
           }
           if (found.viable) continue;
+          if (found.blockedReason !== undefined) {
+            const why =
+              found.blockedReason === 'targetDoesNotStop'
+                ? `${trainName(ctx.doc, toTrainId)} はこの駅を通過するため乗り換えられません`
+                : `${trainName(ctx.doc, toTrainId)} はこの駅から先が ${trainName(ctx.doc, tl.trainId)} より速くないため、緩急接続になりません`;
+            out.push({
+              id: issueId('connection.declaredFails', tl.trainId, i, toTrainId, 'blocked'),
+              ruleId: 'connection.declaredFails',
+              severity: 'error',
+              title: '接続先の列車に乗り換えられません',
+              detail: `${stationName(ctx.doc, stop.stationId)}: ${why}。`,
+              refs,
+              at: stop.arr ?? stop.dep ?? 0,
+              km: ctx.idx.kmOfStation.get(stop.stationId) ?? 0,
+            });
+            continue;
+          }
           const tooShort = found.transferSec < ctx.cfg.connectionMinTransferSec;
           out.push({
             id: issueId('connection.declaredFails', tl.trainId, i, toTrainId, 'window'),
@@ -98,27 +116,59 @@ export const connectionQualityGap: Rule = {
   },
 };
 
+/**
+ * One info per **station**, not per connection.
+ *
+ * A whole-day timetable at a 緩急接続 station produces one viable transfer per
+ * 各停/急行 pair inside the wait window — on this line about a thousand of
+ * them. Listing each one individually is technically true and practically
+ * useless: it buries every real error under a wall of info rows and makes the
+ * problem panel unusable for review, which is the opposite of what a validator
+ * is for. The panel wants the answer to "does 緩急接続 work here, and is it
+ * declared?", and that is a per-station question.
+ */
 export const connectionDiscovered: Rule = {
   id: 'connection.discovered',
   name: '接続を検出',
   defaultSeverity: 'info',
   scope: ['trains'],
   run(ctx) {
-    const out: Issue[] = [];
+    interface Tally {
+      total: number;
+      declared: number;
+      minSec: number;
+      maxSec: number;
+    }
+    const byStation = new Map<StationId, Tally>();
     for (const c of ctx.idx.connections) {
       if (!c.viable) continue;
+      const tally = byStation.get(c.stationId);
+      if (tally === undefined) {
+        byStation.set(c.stationId, {
+          total: 1,
+          declared: c.declared ? 1 : 0,
+          minSec: c.transferSec,
+          maxSec: c.transferSec,
+        });
+        continue;
+      }
+      tally.total++;
+      if (c.declared) tally.declared++;
+      tally.minSec = Math.min(tally.minSec, c.transferSec);
+      tally.maxSec = Math.max(tally.maxSec, c.transferSec);
+    }
+
+    const out: Issue[] = [];
+    for (const [stationId, t] of [...byStation].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const undeclared = t.total - t.declared;
       out.push({
-        id: issueId('connection.discovered', c.stationId, c.fromTrainId, c.toTrainId),
+        id: issueId('connection.discovered', stationId),
         ruleId: 'connection.discovered',
         severity: 'info',
         title: '緩急接続を検出しました',
-        detail: `${stationName(ctx.doc, c.stationId)}: ${trainName(ctx.doc, c.fromTrainId)} から ${trainName(ctx.doc, c.toTrainId)} へ 乗り換え ${formatDuration(c.transferSec)}${c.declared ? '' : ' (未申告)'}。`,
-        refs: [
-          { kind: 'train', trainId: c.fromTrainId },
-          { kind: 'train', trainId: c.toTrainId },
-          { kind: 'station', stationId: c.stationId },
-        ],
-        km: ctx.idx.kmOfStation.get(c.stationId) ?? 0,
+        detail: `${stationName(ctx.doc, stationId)}: 成立する緩急接続 ${t.total} 件 (申告済 ${t.declared} / 未申告 ${undeclared})、乗り換え ${formatDuration(t.minSec)}〜${formatDuration(t.maxSec)}。`,
+        refs: [{ kind: 'station', stationId }],
+        km: ctx.idx.kmOfStation.get(stationId) ?? 0,
       });
     }
     return out;

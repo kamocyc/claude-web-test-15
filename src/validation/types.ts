@@ -118,6 +118,7 @@ export type RuleId =
   | 'turnback.insufficient'
   | 'turnback.tight'
   | 'turnback.trackNotCapable'
+  | 'turnback.trackChanged'
   // duties
   | 'duty.continuityBreak'
   | 'duty.emptyOrUnassigned'

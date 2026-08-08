@@ -277,7 +277,9 @@ export function FormationsScreen() {
                 <th>編成</th>
                 <th>形式</th>
                 <th>両数</th>
+                <th>所属</th>
                 <th>状態</th>
+                <th>基準走行(km)</th>
                 <th>走行距離(km)</th>
                 {INSPECTION_KINDS.map((kind) => (
                   <th key={kind}>{INSPECTION_KIND_LABEL[kind]}</th>
@@ -288,7 +290,7 @@ export function FormationsScreen() {
             <tbody>
               {formations.length === 0 ? (
                 <tr>
-                  <td colSpan={6 + INSPECTION_KINDS.length} className={styles.empty}>
+                  <td colSpan={8 + INSPECTION_KINDS.length} className={styles.empty}>
                     編成がありません
                   </td>
                 </tr>
@@ -315,8 +317,64 @@ export function FormationsScreen() {
                         }
                       />
                     </td>
-                    <td>{doc.formationSeries.byId[formation.seriesId]?.name ?? '—'}</td>
-                    <td className={styles.num}>{formation.cars}</td>
+                    <td>
+                      <select
+                        data-testid={TID.formationSeriesCell(formation.id)}
+                        value={formation.seriesId}
+                        aria-label={`${formation.code} の形式`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'formation/update',
+                            id: formation.id,
+                            patch: { seriesId: e.currentTarget.value as SeriesId },
+                          })
+                        }
+                      >
+                        {series.length === 0 ? <option value="">(形式なし)</option> : null}
+                        {series.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className={styles.num}>
+                      <input
+                        className={styles.narrow}
+                        data-testid={TID.formationCarsCell(formation.id)}
+                        value={formation.cars}
+                        inputMode="numeric"
+                        aria-label={`${formation.code} の両数`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'formation/update',
+                            id: formation.id,
+                            patch: { cars: Number(e.currentTarget.value) || 1 },
+                          })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <select
+                        data-testid={TID.formationDepotCell(formation.id)}
+                        value={formation.homeDepotId}
+                        aria-label={`${formation.code} の所属`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'formation/update',
+                            id: formation.id,
+                            patch: { homeDepotId: e.currentTarget.value as DepotId },
+                          })
+                        }
+                      >
+                        {depots.length === 0 ? <option value="">(車庫なし)</option> : null}
+                        {depots.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
                     <td>
                       <select
                         value={formation.status}
@@ -336,6 +394,22 @@ export function FormationsScreen() {
                         <option value="stored">留置</option>
                         <option value="retired">廃車</option>
                       </select>
+                    </td>
+                    <td className={styles.num}>
+                      <input
+                        className={styles.narrow}
+                        data-testid={TID.formationOdometerCell(formation.id)}
+                        value={formation.odometerKm}
+                        inputMode="numeric"
+                        aria-label={`${formation.code} の基準走行距離`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'formation/update',
+                            id: formation.id,
+                            patch: { odometerKm: Number(e.currentTarget.value) || 0 },
+                          })
+                        }
+                      />
                     </td>
                     <td className={styles.num}>
                       {Math.round(currentOdometerKm(doc, formation.id, asOf)).toLocaleString()}

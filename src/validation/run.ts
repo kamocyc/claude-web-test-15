@@ -23,9 +23,19 @@ function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
-/** `'off'` disables a rule entirely; otherwise the override wins. */
-function severityOf(rule: Rule, ctx: ValidationContext): Severity | 'off' {
-  return ctx.cfg.severityOverrides[rule.id] ?? rule.defaultSeverity;
+/**
+ * `'off'` disables a rule entirely; otherwise an explicit override wins over
+ * whatever the rule chose.
+ *
+ * Absent an override the *issue's own* severity stands. Most rules emit a
+ * single severity equal to their `defaultSeverity`, but a few genuinely have
+ * two grades of the same finding — `turnback.trackChanged` is an error where
+ * the infrastructure makes the move impossible and a warning where it is
+ * merely unmodelled — and forcing every issue to the rule default would erase
+ * that distinction.
+ */
+function severityOf(rule: Rule, ctx: ValidationContext): Severity | 'off' | undefined {
+  return ctx.cfg.severityOverrides[rule.id];
 }
 
 function compareIssues(a: Issue, b: Issue): number {
@@ -54,10 +64,10 @@ export function runValidation(
     const issues: Issue[] = [];
     for (const rule of rules) {
       if (!wanted(rule)) continue;
-      const severity = severityOf(rule, ctx);
-      if (severity === 'off') continue;
+      const override = severityOf(rule, ctx);
+      if (override === 'off') continue;
       for (const issue of rule.run(ctx)) {
-        issue.severity = severity;
+        issue.severity = override ?? issue.severity ?? rule.defaultSeverity;
         issues.push(issue);
       }
     }

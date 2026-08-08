@@ -6,26 +6,30 @@
  * E2E suite use the same path, which means it cannot silently break.
  */
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
-import type { DutyId, FormationId, TrainId } from '@/domain/ids';
-import type { Duty, DutyLeg } from '@/domain/model';
+import type { DayTypeId, DepotId, DutyId, FormationId, SeriesId, StationId, TrainId } from '@/domain/ids';
+import type { Duty, DutyLeg, InspectionKind, ProjectDocument } from '@/domain/model';
+import { INSPECTION_KIND_LABEL } from '@/domain/model';
 import {
   dutyDistance,
+  dutyLegEndpoints,
+  dutyLegSpan,
   dutyOfTrainMap,
   dutySpan,
   trainEndSec,
   trainLabel,
   trainStartSec,
 } from '@/domain/project';
-import { formatTime } from '@/domain/time';
+import { formatTime, parseTime } from '@/domain/time';
 import { entityList, formatKm } from '@/domain/units';
 import { newId } from '@/store/idPool';
 import { useUiStore } from '@/store/uiStore';
 import { Card, Field } from '../components/Field';
 import { useDispatch, useDoc } from '../hooks';
+import { clearing, numberOrUndefined } from '../patch';
 
 import styles from './Editor.module.css';
 import duties from './Duties.module.css';
@@ -81,6 +85,7 @@ export function DutiesScreen() {
 
   const [code, setCode] = useState('');
   const [openTrainId, setOpenTrainId] = useState<string | undefined>(undefined);
+  const [expandedDutyId, setExpandedDutyId] = useState<string | undefined>(undefined);
 
   const addDuty = (): void => {
     const trimmed = code.trim();
@@ -160,9 +165,10 @@ export function DutiesScreen() {
               ) : null}
               {dutyList.map((duty) => {
                 const span = dutySpan(doc, duty);
+                const expanded = expandedDutyId === duty.id;
                 return (
+                  <Fragment key={duty.id}>
                   <tr
-                    key={duty.id}
                     data-testid={TID.dutyRow(duty.id)}
                     onClick={() => select({ kind: 'duty', dutyId: duty.id })}
                   >
@@ -220,6 +226,17 @@ export function DutiesScreen() {
                     <td>
                       <button
                         type="button"
+                        data-testid={TID.dutyExpand(duty.id)}
+                        aria-expanded={expanded}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedDutyId(expanded ? undefined : duty.id);
+                        }}
+                      >
+                        行路を編集
+                      </button>
+                      <button
+                        type="button"
                         className={styles.danger}
                         onClick={() => dispatch({ type: 'duty/remove', dutyIds: [duty.id] })}
                       >
@@ -227,6 +244,14 @@ export function DutiesScreen() {
                       </button>
                     </td>
                   </tr>
+                  {expanded ? (
+                    <tr>
+                      <td colSpan={6}>
+                        <DutyDetail duty={duty} />
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -293,6 +318,329 @@ export function DutiesScreen() {
         </ul>
       </Card>
     </div>
+  );
+}
+
+/**
+ * The legs of one duty, in order, plus the constraints that decide which
+ * formation may work it.
+ *
+ * 留置 and 検査 legs render in the Gantt and in the continuity check but had no
+ * way to be created: the only leg-producing path was 運用に追加, which makes
+ * `train` legs. A duty that parks a set at a terminus for two hours, or takes it
+ * into the depot for a 列車検査 mid-day, is now expressible.
+ */
+function DutyDetail({ duty }: { duty: Duty }) {
+  const doc = useDoc();
+  const dispatch = useDispatch();
+  const stations = useMemo(() => entityList(doc.stations), [doc]);
+  const depots = useMemo(() => entityList(doc.depots), [doc]);
+  const seriesList = useMemo(() => entityList(doc.formationSeries), [doc]);
+  const dayTypes = useMemo(() => entityList(doc.dayTypes), [doc]);
+
+  const move = (index: number, delta: number): void => {
+    const target = index + delta;
+    if (target < 0 || target >= duty.legs.length) return;
+    const order = duty.legs.map((_, i) => i);
+    order[index] = target;
+    order[target] = index;
+    dispatch({ type: 'duty/reorderLegs', dutyId: duty.id, order });
+  };
+
+  /** Where the duty currently ends — the natural place for a new leg. */
+  const tail = (): { stationId: StationId | undefined; at: number } => {
+    const last = duty.legs[duty.legs.length - 1];
+    if (last === undefined) {
+      return { stationId: stations[0]?.id, at: doc.settings.serviceDayStartSec };
+    }
+    const span = dutyLegSpan(doc, last);
+    const ends = dutyLegEndpoints(doc, last);
+    return {
+      stationId: ends?.toStationId ?? stations[0]?.id,
+      at: span?.to ?? doc.settings.serviceDayStartSec,
+    };
+  };
+
+  const addStable = (): void => {
+    const { stationId, at } = tail();
+    if (stationId === undefined) return;
+    dispatch({
+      type: 'duty/insertLeg',
+      dutyId: duty.id,
+      leg: { kind: 'stable', stationId, from: at, to: at + 30 * 60 },
+    });
+  };
+
+  const addInspection = (): void => {
+    const depot = depots[0];
+    if (depot === undefined) return;
+    const { at } = tail();
+    dispatch({
+      type: 'duty/insertLeg',
+      dutyId: duty.id,
+      leg: {
+        kind: 'inspection',
+        depotId: depot.id,
+        inspectionKind: depot.inspectionKinds[0] ?? 'train',
+        from: at,
+        to: at + 2 * 3600,
+      },
+    });
+  };
+
+  const replaceLeg = (index: number, leg: DutyLeg): void => {
+    dispatch({ type: 'duty/removeLeg', dutyId: duty.id, legIndex: index });
+    dispatch({ type: 'duty/insertLeg', dutyId: duty.id, leg, atIndex: index });
+  };
+
+  return (
+    <div>
+      <div className={styles.form}>
+        <Field label="必要両数">
+          <input
+            className={styles.narrow}
+            data-testid={TID.dutyRequiredCars(duty.id)}
+            value={duty.requiredCars ?? ''}
+            inputMode="numeric"
+            onChange={(e) => {
+              const value = numberOrUndefined(e.currentTarget.value);
+              dispatch({
+                type: 'duty/update',
+                id: duty.id,
+                patch:
+                  value === undefined || value <= 0
+                    ? clearing<Omit<Duty, 'legs'>>('requiredCars')
+                    : { requiredCars: value },
+              });
+            }}
+          />
+        </Field>
+        <span className={styles.hint}>必要形式</span>
+        {seriesList.map((s) => {
+          const chosen = (duty.requiredSeriesIds ?? []).includes(s.id);
+          return (
+            <label key={s.id} className={styles.checkField}>
+              <input
+                type="checkbox"
+                data-testid={TID.dutyRequiredSeries(duty.id)}
+                checked={chosen}
+                onChange={(e) => {
+                  const current = duty.requiredSeriesIds ?? [];
+                  const next: SeriesId[] = e.currentTarget.checked
+                    ? [...current.filter((id) => id !== s.id), s.id]
+                    : current.filter((id) => id !== s.id);
+                  dispatch({
+                    type: 'duty/update',
+                    id: duty.id,
+                    patch:
+                      next.length === 0
+                        ? clearing<Omit<Duty, 'legs'>>('requiredSeriesIds')
+                        : { requiredSeriesIds: next },
+                  });
+                }}
+              />
+              <span>{s.name}</span>
+            </label>
+          );
+        })}
+        <span className={styles.hint}>運転日</span>
+        {dayTypes.map((dt) => (
+          <label key={dt.id} className={styles.checkField}>
+            <input
+              type="checkbox"
+              data-testid={TID.dutyDayType(duty.id, dt.id)}
+              checked={duty.dayTypeIds.includes(dt.id)}
+              onChange={(e) => {
+                const next: DayTypeId[] = e.currentTarget.checked
+                  ? [...duty.dayTypeIds.filter((id) => id !== dt.id), dt.id]
+                  : duty.dayTypeIds.filter((id) => id !== dt.id);
+                dispatch({ type: 'duty/update', id: duty.id, patch: { dayTypeIds: next } });
+              }}
+            />
+            <span>{dt.name}</span>
+          </label>
+        ))}
+      </div>
+
+      <div className={styles.form}>
+        <button
+          type="button"
+          data-testid={TID.dutyAddStableLeg(duty.id)}
+          onClick={addStable}
+          disabled={stations.length === 0}
+        >
+          留置を追加
+        </button>
+        <button
+          type="button"
+          data-testid={TID.dutyAddInspectionLeg(duty.id)}
+          onClick={addInspection}
+          disabled={depots.length === 0}
+        >
+          検査を追加
+        </button>
+        <button
+          type="button"
+          onClick={() => dispatch({ type: 'duty/sortLegsByTime', dutyId: duty.id })}
+          disabled={duty.legs.length < 2}
+        >
+          時刻順に整列
+        </button>
+      </div>
+
+      <table className={styles.table} data-testid={TID.dutyLegList(duty.id)}>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>種別</th>
+            <th>内容</th>
+            <th>時刻</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {duty.legs.length === 0 ? (
+            <tr>
+              <td colSpan={5} className={styles.empty}>
+                行路が空です
+              </td>
+            </tr>
+          ) : null}
+          {duty.legs.map((leg, index) => (
+            <tr key={`${leg.kind}-${index}`} data-leg-index={index} data-leg-kind={leg.kind}>
+              <td className={styles.num}>{index + 1}</td>
+              <td>{leg.kind === 'train' ? '列車' : leg.kind === 'stable' ? '留置' : '検査'}</td>
+              <td>
+                <LegContent
+                  doc={doc}
+                  leg={leg}
+                  onChange={(next) => replaceLeg(index, next)}
+                />
+              </td>
+              <td className={styles.num}>
+                <LegTimes leg={leg} onChange={(next) => replaceLeg(index, next)} />
+              </td>
+              <td>
+                <button
+                  type="button"
+                  data-testid={TID.dutyLegUp(duty.id, index)}
+                  aria-label={`${index + 1} 番目を上へ`}
+                  disabled={index === 0}
+                  onClick={() => move(index, -1)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  data-testid={TID.dutyLegDown(duty.id, index)}
+                  aria-label={`${index + 1} 番目を下へ`}
+                  disabled={index === duty.legs.length - 1}
+                  onClick={() => move(index, 1)}
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  className={styles.danger}
+                  data-testid={TID.dutyLegRemove(duty.id, index)}
+                  onClick={() =>
+                    dispatch({ type: 'duty/removeLeg', dutyId: duty.id, legIndex: index })
+                  }
+                >
+                  削除
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function LegContent({
+  doc,
+  leg,
+  onChange,
+}: {
+  doc: ProjectDocument;
+  leg: DutyLeg;
+  onChange(next: DutyLeg): void;
+}) {
+  if (leg.kind === 'train') {
+    const train = doc.trains.byId[leg.trainId];
+    return <span>{train === undefined ? '(削除済み)' : trainLabel(doc, train)}</span>;
+  }
+  if (leg.kind === 'stable') {
+    return (
+      <select
+        value={leg.stationId}
+        aria-label="留置する駅"
+        onChange={(e) => onChange({ ...leg, stationId: e.currentTarget.value as StationId })}
+      >
+        {entityList(doc.stations).map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <>
+      <select
+        value={leg.depotId}
+        aria-label="検査する車庫"
+        onChange={(e) => onChange({ ...leg, depotId: e.currentTarget.value as DepotId })}
+      >
+        {entityList(doc.depots).map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.name}
+          </option>
+        ))}
+      </select>
+      <select
+        value={leg.inspectionKind}
+        aria-label="検査の種類"
+        onChange={(e) =>
+          onChange({ ...leg, inspectionKind: e.currentTarget.value as InspectionKind })
+        }
+      >
+        {(Object.keys(INSPECTION_KIND_LABEL) as InspectionKind[]).map((k) => (
+          <option key={k} value={k}>
+            {INSPECTION_KIND_LABEL[k]}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+function LegTimes({ leg, onChange }: { leg: DutyLeg; onChange(next: DutyLeg): void }) {
+  if (leg.kind === 'train') return <span>—</span>;
+  return (
+    <>
+      <input
+        className={styles.narrow}
+        value={formatTime(leg.from)}
+        aria-label="開始時刻"
+        onChange={(e) => {
+          const value = parseTime(e.currentTarget.value);
+          if (value === undefined) return;
+          onChange({ ...leg, from: value });
+        }}
+      />
+      <input
+        className={styles.narrow}
+        value={formatTime(leg.to)}
+        aria-label="終了時刻"
+        onChange={(e) => {
+          const value = parseTime(e.currentTarget.value);
+          if (value === undefined) return;
+          onChange({ ...leg, to: value });
+        }}
+      />
+    </>
   );
 }
 

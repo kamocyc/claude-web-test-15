@@ -126,6 +126,71 @@ export const turnbackTight: Rule = {
   },
 };
 
+/**
+ * 折り返しで番線が変わっている — the formation arrives on one road and the next
+ * train of the same duty leaves from another, with no move between them.
+ *
+ * The plan is asserting that the stock teleported. Whether that is a mistake or
+ * merely an omission depends on the station:
+ *
+ * - Where a 引上線 / 留置線 exists the move is physically possible; the yard
+ *   just is not in the document. That is a **warning**, and the fix is to model
+ *   the shunt as a `stable` leg on that road so the occupancy is booked.
+ * - Where none exists — 大井町 is 頭端式1面2線 with no tail track — there is no
+ *   way to get from one platform road to the other without occupying the
+ *   running line, so the plan is simply not executable. That is an **error**.
+ *
+ * A `stable` leg between the two train legs that names the road the formation
+ * moved to *is* the model of the move, so it makes the change legitimate and no
+ * issue is raised.
+ */
+export const turnbackTrackChanged: Rule = {
+  id: 'turnback.trackChanged',
+  name: '折り返しで番線が変わる',
+  defaultSeverity: 'error',
+  scope: ['duties', 'tracks'],
+  run(ctx) {
+    const out: Issue[] = [];
+    for (const p of turnbackPairs(ctx)) {
+      const arrivingTrackId = p.arriving.stops[p.arriving.stops.length - 1]?.trackId;
+      const departingTrackId = p.departing.stops[0]?.trackId;
+      if (arrivingTrackId === undefined || departingTrackId === undefined) continue;
+      if (arrivingTrackId === departingTrackId) continue;
+      // A modelled berth between the two legs is the move: nothing to report.
+      if (p.viaTrackIds.includes(departingTrackId)) continue;
+
+      const shuntable = tracksOfStation(ctx.doc, p.stationId).some(
+        (t) => t.usage === 'stabling' || t.usage === 'depot',
+      );
+      out.push({
+        id: issueId('turnback.trackChanged', p.duty.id, p.arriving.id, p.departing.id),
+        ruleId: 'turnback.trackChanged',
+        severity: shuntable ? 'warning' : 'error',
+        title: shuntable
+          ? '折り返しで番線が変わりますが入換が組まれていません'
+          : '折り返しで番線が変わりますが移動できません',
+        detail:
+          `${dutyName(ctx.doc, p.duty.id)} ${stationName(ctx.doc, p.stationId)}: ` +
+          `${trainName(ctx.doc, p.arriving.id)} は ${trackFullName(ctx.doc, arrivingTrackId)} に到着し、` +
+          `${trainName(ctx.doc, p.departing.id)} は ${trackFullName(ctx.doc, departingTrackId)} から出発しますが、` +
+          `その間の入換が計画にありません。` +
+          (shuntable
+            ? '引上線・留置線があるので移動自体は可能です。留置レグで番線を指定してください。'
+            : 'この駅には引上線も留置線もなく、本線を支障せずにホーム間を移動することはできません。'),
+        refs: [
+          { kind: 'duty', dutyId: p.duty.id, legIndex: p.legIndex },
+          { kind: 'stationTrack', stationTrackId: arrivingTrackId },
+          { kind: 'stationTrack', stationTrackId: departingTrackId },
+          { kind: 'station', stationId: p.stationId },
+        ],
+        at: p.arrSec,
+        km: ctx.idx.kmOfStation.get(p.stationId) ?? 0,
+      });
+    }
+    return out;
+  },
+};
+
 export const turnbackTrackNotCapable: Rule = {
   id: 'turnback.trackNotCapable',
   name: '折り返しできない番線',
