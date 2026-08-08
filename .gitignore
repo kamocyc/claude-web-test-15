@@ -6,3 +6,8 @@ test-results/
 *.local
 .DS_Store
 .vite/
+
+# Throwaway browser-probe scripts. They have to live at the repo root for
+# module resolution to find @playwright/test, so they are ignored rather than
+# relied on being deleted.
+/*.mjs
