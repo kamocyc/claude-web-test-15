@@ -88,6 +88,15 @@ const OIMACHI_MAX_LAYOVER_SEC = 1000;
  * eight minutes away, and where standing still costs nothing.
  */
 const MIZONOKUCHI_MAX_LAYOVER_SEC = 960;
+/*
+ * Deriving this from the cycle in force — `cycleSec − 120`, which is how the
+ * paragraph above reasons about it — was tried and reverted. It is the right
+ * formula and the wrong number: every band is back on the 900-second grid, so
+ * it yields 780 s, tighter than the 960 above, and the extra cuts cost 128
+ * 回送 across 64 duties instead of 68 across 34. The 960 buys the slack that
+ * the band transitions need. Revisit only if a band with a different cycle
+ * ever returns.
+ */
 /** A layover longer than this becomes an explicit `stable` leg in the duty. */
 const STABLE_LEG_MIN_SEC = 1200;
 /**
