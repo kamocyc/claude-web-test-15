@@ -186,16 +186,23 @@
   color: var(--text-faint);
 }
 
+/*
+ * The canvas views size themselves with `height: 100%` all the way down. A
+ * percentage height resolves against the parent's *computed* height, and
+ * `min-height` alone leaves that computed height `auto` — so the percentage is
+ * indefinite, and the layer container's `contain: strict` then collapses it to
+ * zero. Establishing a positioned containing block and pinning the view to it
+ * gives the chain a definite height to resolve against.
+ */
 .canvasHost {
   flex: 1 1 auto;
   min-height: 420px;
-  display: flex;
-  flex-direction: column;
+  position: relative;
 }
 
 .canvasHost > :global(div) {
-  flex: 1 1 auto;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
 }
 
 .legend {

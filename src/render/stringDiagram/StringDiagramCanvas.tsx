@@ -265,7 +265,11 @@ export function StringDiagramCanvas(props: StringDiagramProps) {
     <div
       data-testid={TID.diagram}
       className={className}
-      style={{ position: 'relative', width: '100%', height: '100%' }}
+      // Position and size are the host's decision, not ours. Editor.module.css
+      // .canvasHost pins this element with `position:absolute; inset:0`, which
+      // is what gives the `height: 100%` chain below a definite box to resolve
+      // against. Setting either here would win over the stylesheet and
+      // collapse the layers to zero height.
     >
       <div ref={layers.containerRef} style={layerStyles.container} {...handlers}>
         <canvas
