@@ -91,6 +91,22 @@ test.describe('東急大井町線 sample', () => {
     await expect(sim.stations.yardChart).toHaveAttribute('data-conflict-count', '0');
   });
 
+  test('the terminals — where every turnback is — are also conflict-free', async ({ page }) => {
+    // 旗の台 alone is not enough coverage: it is the one busy station with no
+    // turnbacks, and a turnback is exactly what produces two overlapping bars
+    // for a single formation. A regression that paints every terminal red is
+    // invisible from 旗の台.
+    const sim = new Simulator(page);
+    await sim.stations.open();
+
+    for (const name of ['大井町', '溝の口', '鷺沼']) {
+      await sim.stations.selectStation(name);
+      expect(await sim.stations.yardBars().count(), `${name} should have bars`).toBeGreaterThan(0);
+      await expect(sim.stations.yardChart, name).toHaveAttribute('data-conflict-count', '0');
+      await expect(sim.stations.yardConflicts, name).toHaveCount(0);
+    }
+  });
+
   test('the 検査 screen renders the inspection projection and its badges', async ({ page }) => {
     const sim = new Simulator(page);
 

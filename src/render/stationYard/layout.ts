@@ -11,7 +11,7 @@
  * show, so it is computed here rather than left to the renderer.
  */
 
-import type { StationId, StationTrackId, TrainId } from '@/domain/ids';
+import type { DutyId, StationId, StationTrackId, TrainId } from '@/domain/ids';
 import type { ProjectDocument, TrackUsage } from '@/domain/model';
 import { tracksOfStation } from '@/domain/project';
 import type { Sec } from '@/domain/units';
@@ -42,7 +42,12 @@ export interface YardBar {
   bookedTo: Sec;
   label: string;
   color: string;
-  /** Overlaps another bar on the same lane. */
+  /**
+   * The duty working this train. Two bars of the same duty are the same
+   * physical formation and so are never a conflict — see the overlap scan.
+   */
+  dutyId?: DutyId;
+  /** Overlaps another bar on the same lane, worked by a different formation. */
   conflict: boolean;
   /** 待避 — this dwell exists so another train can pass. */
   overtakeWait: boolean;
@@ -86,6 +91,7 @@ export function computeYardLayout(
     for (const iv of intervals) {
       if (iv.stationId !== stationId) continue;
       const tl = index.timelines.get(iv.trainId);
+      const dutyId = index.dutyOfTrain.get(iv.trainId);
       const type = tl ? getEntity(doc.trainTypes, tl.typeId) : undefined;
       const ev = tl?.events.find(
         (e) =>
@@ -106,33 +112,34 @@ export function computeYardLayout(
         color: type?.color ?? '#38bdf8',
         conflict: false,
         overtakeWait: ev?.isOvertakeWait ?? false,
+        ...(dutyId !== undefined ? { dutyId } : {}),
       });
     }
   }
 
   bars.sort((a, b) => a.laneIndex - b.laneIndex || a.from - b.from);
 
-  // Mark overlaps. Bars are lane-major then time-ordered, so a single pass
-  // comparing each bar with the previous one on the same lane suffices for the
-  // pairwise case, and the running max handles chains of three or more.
+  // Mark overlaps, applying the same exclusion `track.doubleOccupancy` uses:
+  // one duty is one physical formation, so it cannot conflict with itself. A
+  // turnback necessarily produces two overlapping bars — the arrival held to
+  // the hand-over, and the departure's own booking opening an approach margin
+  // earlier — and without this the chart paints every terminal solid red while
+  // the problem panel correctly reports no errors.
+  //
+  // The pairwise scan is O(bars per lane squared) in the worst case but breaks
+  // as soon as a later bar starts after the current one ends, so on real data
+  // it stays close to linear.
   let conflictCount = 0;
-  let prev: YardBar | undefined;
-  let laneMaxTo = -Infinity;
-  let laneOfMax = -1;
-  for (const bar of bars) {
-    if (prev === undefined || prev.laneIndex !== bar.laneIndex) {
-      laneMaxTo = bar.to;
-      laneOfMax = bar.laneIndex;
-      prev = bar;
-      continue;
-    }
-    if (laneOfMax === bar.laneIndex && bar.from < laneMaxTo) {
-      bar.conflict = true;
-      prev.conflict = true;
+  for (let i = 0; i < bars.length; i++) {
+    const a = bars[i]!;
+    for (let j = i + 1; j < bars.length; j++) {
+      const b = bars[j]!;
+      if (b.laneIndex !== a.laneIndex || b.from >= a.to) break;
+      if (a.dutyId !== undefined && a.dutyId === b.dutyId) continue;
+      a.conflict = true;
+      b.conflict = true;
       conflictCount++;
     }
-    if (bar.to > laneMaxTo) laneMaxTo = bar.to;
-    prev = bar;
   }
 
   let from = Infinity;

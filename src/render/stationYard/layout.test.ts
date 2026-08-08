@@ -69,6 +69,55 @@ describe('conflict detection', () => {
     expect(new Set(conflicting.map((b) => b.laneIndex)).size).toBe(1);
   });
 
+  it('never flags two bars of the same duty — one formation cannot foul itself', () => {
+    // A turnback always produces two overlapping bars on one road: the arrival
+    // held until the hand-over, and the departure's own booking opening an
+    // approach margin earlier. Counting those as conflicts painted every
+    // terminal solid red while the validator correctly reported none, so the
+    // chart applies the same duty-identity exclusion as track.doubleOccupancy.
+    const index = sampleIndex();
+    const doc = index.doc;
+    const overlapping: OccupancyInterval[] = [
+      {
+        trackId: TOY.c1,
+        stationId: TOY.stationC,
+        trainId: TOY.localDown,
+        from: 8 * 3600,
+        to: 8 * 3600 + 600,
+        bookedFrom: 8 * 3600 + 45,
+        bookedTo: 8 * 3600 + 570,
+      },
+      {
+        trackId: TOY.c1,
+        stationId: TOY.stationC,
+        trainId: TOY.depotIn,
+        from: 8 * 3600 + 300,
+        to: 8 * 3600 + 900,
+        bookedFrom: 8 * 3600 + 345,
+        bookedTo: 8 * 3600 + 870,
+      },
+    ];
+
+    // Both trains belong to 運用 01 in the fixture, so this must be quiet…
+    const sameDuty = computeYardLayout(
+      doc,
+      { ...index, trackIntervals: new Map([[TOY.c1, overlapping]]) },
+      TOY.stationC,
+    );
+    expect(sameDuty.conflictCount).toBe(0);
+    expect(sameDuty.bars.every((b) => !b.conflict)).toBe(true);
+
+    // …while the identical overlap between two different duties is a conflict.
+    const split = new Map(index.dutyOfTrain);
+    split.set(TOY.depotIn, TOY.dutyExpress);
+    const crossDuty = computeYardLayout(
+      doc,
+      { ...index, trackIntervals: new Map([[TOY.c1, overlapping]]), dutyOfTrain: split },
+      TOY.stationC,
+    );
+    expect(crossDuty.conflictCount).toBeGreaterThan(0);
+  });
+
   it('does not flag bars that merely touch', () => {
     const index = sampleIndex();
     const doc = index.doc;
