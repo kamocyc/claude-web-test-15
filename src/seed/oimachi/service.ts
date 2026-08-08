@@ -1,18 +1,23 @@
 /**
- * The weekday service plan: eight time bands, each with one repeating cycle.
+ * The weekday service plan: twelve time bands, each with one repeating cycle,
+ * all of them on the same 900-second grid.
  *
- *   05:00–06:30 早朝     20分周期  各停のみ、鷺沼発着の青各停を含む
- *   06:30–07:30 立上り   15分周期  急行運転開始 (8本/時)
- *   07:30–09:00 朝ラッシュ 15分周期  上り20本/時・下り16本/時
- *   09:00–10:00 逓減     15分周期  12本/時
- *   10:00–16:00 日中     15分周期  急行1+各停3 = 16本/時
- *   16:00–20:00 夕ラッシュ 15分周期  16本/時、急行は鷺沼まで直通
- *   20:00–23:00 夜間     15分周期  日中パターンに復帰
- *   23:00–24:30 深夜     20分周期  終列車、溝の口引上線から入庫
+ *   05:00–06:30 早朝       8本/時   緑各停 + 急行
+ *   06:30–07:00 立上り     8本/時
+ *   07:00–07:30 朝ラッシュ準備 下り8 / 上り16   上りが先に立ち上がる
+ *   07:30–08:30 朝ラッシュ 16本/時
+ *   08:30–09:00 逓減準備   下り16 / 上り12
+ *   09:00–09:30 逓減       12本/時
+ *   09:30–10:00 日中準備   下り12 / 上り16
+ *   10:00–16:00 日中       16本/時  急行1+各停3
+ *   16:00–20:00 夕ラッシュ 16本/時
+ *   20:00–22:30 夜間       16本/時
+ *   22:30–23:00 深夜準備   下り12 / 上り8
+ *   23:00–24:30 深夜       6本/時   20分周期、終列車
  *
  * ===========================================================================
- * Two structural findings that shaped this file — both of them consequences of
- * the researched infrastructure, not of the numbers chosen here
+ * Three structural findings that shaped this file — all of them consequences
+ * of the researched infrastructure, not of the numbers chosen here
  * ===========================================================================
  *
  * **1. One 待避線 per direction caps the line at 16 本/時 wherever an 急行 runs.**
@@ -25,28 +30,32 @@
  * 青. Four trains in a 15-minute cycle satisfies that. Five does not, in either
  * direction, unless a second passing track exists.
  *
- * **2. 上り can do 20 本/時 in the morning because it has a second one.**
- * 上野毛's passing loop is 上り-only, so the 朝ラッシュ 上り — and only the 上り
- * — can carry a fifth train per cycle, standing one 各停 aside at 旗の台 and a
- * second at 上野毛 for the same 急行. The 下り peak, morning or evening, cannot:
- * the 夕ラッシュ therefore tightens by running 7-car 急行 through onto the
- * 田園都市線 rather than by running more trains. That asymmetry is a real
- * property of the 大井町線 and the model reproduces it rather than papering
- * over it.
+ * The 朝ラッシュ used to run a fifth 上り train per cycle — 20 本/時 — standing a
+ * second 各停 aside in 上野毛's 上り-only loop. It cannot: 大井町 is a stub, so
+ * every 上り train that arrives has to leave again as a 下り train and the peak
+ * is symmetric by conservation. The extra 上り trains had nowhere to go and
+ * simply flooded the terminal. 16 本/時 each way is the line's real ceiling
+ * here, and 上野毛's loop instead buys recovery margin.
+ *
+ * **2. Every 急行 works through to 鷺沼, because 溝の口 cannot turn it.**
+ * See `THROUGH_EXPRESS_UP`.
+ *
+ * **3. The 上り changes gear a run time before the 下り does.**
+ * See `RAMP_LEAD_SEC`. That is what the 準備 bands are.
  *
  * ===========================================================================
  * The 15-minute grid
  * ===========================================================================
  *
- * Every band from 立上り to 夜間 uses the SAME 900-second cycle and the same
- * slot offsets, and every band boundary falls on a multiple of 900 s from
- * 06:30. Bands differ only in which slots they populate. That is what keeps the
+ * Every band except 深夜 uses the SAME 900-second cycle and the same slot
+ * offsets, and every band boundary falls on a multiple of 900 s from 05:00.
+ * Bands differ only in which slots they populate. That is what keeps the
  * transitions clean: a band never has to re-phase, so no train from the
- * outgoing pattern can arrive inside the incoming one's headway.
+ * outgoing pattern can arrive inside the incoming one's headway, and no
+ * arrival is stranded at a terminal because the next departure moved.
  *
- *   下り  d1 緑 +0:00 (旗の台で待避)   d2 急 +4:10   d3 青 +7:30   d4 緑 +11:00
- *   上り  u1 緑 +0:00 (旗の台で待避)   u2 急 +5:00   u3 青 +8:00   u4 緑 +11:00
- *                                      u5 緑 +13:20 (上野毛で待避、朝のみ)
+ *   下り  d1 青 +0:00 (旗の台で待避)   d2 急 +4:10   d3 緑 +7:20   d4 緑 +10:40
+ *   上り  u1 緑 +3:30 (旗の台で待避)   u2 急 +8:30   u3 青 +12:20  u4 緑 +10:10
  *
  * The 急行 leaves four to five minutes behind the 各停 it will overtake — far
  * enough that it is still 100 s behind on arrival at 旗の台, which is where the

@@ -15,12 +15,16 @@
  *      pair, which has no platform there at all.
  *   3. **Platform.** A passenger stop may not be booked on a 通過線.
  *   4. **折り返し.** A formation that arrives and works the next train out of
- *      the same station reverses *in place*: the arrival and the departure are
- *      one continuous occupation of ONE road. Booking them as two independent
- *      events is what produced a plan where every 大井町 arrival was on 2番線,
- *      every departure on 1番線, and the stock crossed between them by magic —
- *      impossible at a 頭端式1面2線 stub with no tail track. `TurnbackLink`
- *      makes the pair a single `Event` with a single road.
+ *      the same station without shunting reverses *in place*: the arrival and
+ *      the departure are one continuous occupation of ONE road. Booking them as
+ *      two independent events is what produced a plan where every 大井町 arrival
+ *      was on 2番線, every departure on 1番線, and the stock crossed between them
+ *      by magic — impossible at a 頭端式1面2線 stub with no tail track.
+ *      `TurnbackLink` makes the pair a single `Event` with a single road. Where
+ *      the formation DOES shunt — 溝の口, out to a 引上線 for the layover — the
+ *      caller claims the tail track through `placeBerth` first and does not pass
+ *      a `TurnbackLink`, so the two ends stay separate 50-second events and the
+ *      platform faces stay free.
  *
  * Greedy is sufficient for the service trains because they come from a
  * repeating cycle: within a station the events arrive in a near-periodic order,

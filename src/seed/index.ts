@@ -4,7 +4,7 @@
  * Pipeline:
  *
  *   facts.ts      infrastructure, types, patterns, fleet, inspection rules
- *   service.ts    eight time bands, each one repeating cycle
+ *   service.ts    twelve time bands, each one repeating cycle
  *   expand.ts     band × cycle × slot  ->  TrainSpec
  *   stopTimes.ts  TrainSpec -> timed stops, 待避 solved to a fixpoint
  *   dutyMatch.ts  minimum path cover  ->  one chain per vehicle-day
@@ -64,23 +64,28 @@ import {
 const MAX_LAYOVER_SEC = 2400;
 /**
  * 大井町 is 頭端式1面2線 — two dead-end roads, no siding, no tail track — so a
- * formation waiting there is a platform out of service. Two roads at 50 s of
- * approach + clear absorb `2 × 3600 / (layover + 50)` turnbacks an hour; ten
- * minutes therefore supports 11 本/時 per road, comfortably above the 20 本/時
- * the 朝ラッシュ asks of the pair. Anything longer runs 入庫 to 鷺沼 instead.
+ * formation waiting there is a platform out of service. It reverses in place,
+ * holding one road from `arrival − 30 s` to `departure + 20 s`, and at 16 本/時
+ * the pair can carry `2 × 3600 / (layover + 50)` turnbacks an hour. The typical
+ * layover the grid produces is about 5½ minutes, which uses 85 % of the pair;
+ * this cap is not that figure but the outlier bound — the longest single wait
+ * the plan will let a formation take there before it runs 入庫 to 鷺沼 instead.
+ *
+ * A tighter bound is worse, not better: cutting a chain replaces one occupation
+ * with two (the 入庫 leaving, and a 出庫 arriving for whatever comes next), and
+ * below about a quarter of an hour the two cost more road than the wait did.
  */
 const OIMACHI_MAX_LAYOVER_SEC = 1000;
 /**
  * The same question at 溝の口, where the answer is set by the two 引上線.
  *
  * A shunted 折り返し books a tail track for the whole layover plus a minute of
- * yard margin either side, and there are two of them: at 16 本/時 the pair can
- * absorb `2 × 900 / (layover + 120)` of the four turnbacks in each 15-minute
- * cycle. Two of the four fit comfortably at a quarter-hour layover; a formation
- * wanting longer than that would take a tail track out of circulation for two
- * whole cycles and push the next 各停 onto a platform face. Fifteen minutes is
- * therefore the cut-off, and a chain that wants more runs 入庫 to 鷺沼 — eight
- * minutes away, and where a formation standing still costs nothing.
+ * yard margin either side, and there are two of them. Each 15-minute cycle
+ * turns two 大井町線 各停 at 溝の口, one per tail track, so a layover longer than
+ * `900 − 120` seconds spills into the next cycle and takes the road the next
+ * 各停 needs. Sixteen minutes leaves a little slack past that for the band
+ * transitions; beyond it the chain is cut and the formation runs 入庫 to 鷺沼 —
+ * eight minutes away, and where standing still costs nothing.
  */
 const MIZONOKUCHI_MAX_LAYOVER_SEC = 960;
 /** A layover longer than this becomes an explicit `stable` leg in the duty. */
@@ -90,11 +95,11 @@ const STABLE_LEG_MIN_SEC = 1200;
  * it instead of standing on the platform.
  *
  * That is what the two 溝の口 引上線 are for, and modelling it is what makes the
- * terminal work: only two of 溝の口's four faces belong to the 大井町線, and
- * three 大井町線 trains turn back there every cycle. Holding each of them on a
- * platform for its whole layover needs 2.7 roads and there are two. Seven
- * minutes is the threshold because below it the two shunt moves would cost more
- * than the wait saves.
+ * terminal work: only two of 溝の口's four faces belong to the 大井町線, and each
+ * of them has to stay free for the flow of arrivals and departures — at 16 本/時
+ * an arrival and a departure fall 45 seconds apart, which already needs both.
+ * Below seven minutes the two shunt moves would cost more than the wait saves,
+ * so a short turnback still reverses in place.
  */
 const SHUNT_TO_SIDING_MIN_SEC = 420;
 /** Depot time a formation needs between two duties on the same day. */
@@ -256,9 +261,11 @@ export function buildOimachiProject(): ProjectDocument {
   // -- 3. 番線 for the service pattern -------------------------------------
   // Service trains are booked first, as a block: they are the timetable, and
   // the empty moves have to fit around them rather than the other way round.
-  // Each short turnback inside a chain is booked as ONE occupation of ONE road:
+  // A turnback inside a chain is booked either as ONE occupation of ONE road —
   // the formation reverses in place, which is the only thing a stub terminal
-  // can do.
+  // can do — or as an arrival, a berth on a 引上線 and a departure. Which one is
+  // decided just below, before the sweep, because the sweep has to know whether
+  // the arrival and the departure are one occupation or two.
   const typeById = new Map(facts.trainTypes.map((t) => [t.id, t]));
   const saginumaStationId = facts.depots[0]!.stationId;
   const booking = new TrackBooking(facts);
@@ -267,11 +274,11 @@ export function buildOimachiProject(): ProjectDocument {
     assignables.set(train.id, toAssignable(train, typeById, facts));
   }
   /**
-   * How long a formation may stand on the platform road it arrived at before
-   * the plan moves it out of the way. Where a 引上線 exists that is the seven
-   * minutes above; where none does — 大井町 — the only thing a formation can do
-   * is sit on the platform, so the threshold is the full `stable` leg limit and
-   * `OIMACHI_MAX_LAYOVER_SEC` is what keeps that bounded.
+   * How long a chain END may wait on the platform road it arrived at before the
+   * plan shunts it clear for the empty move. Where a 引上線 exists that is the
+   * seven minutes above; where none does — 大井町 — the only thing a formation
+   * can do is sit on the platform, so the threshold is the full `stable` leg
+   * limit and `OIMACHI_MAX_LAYOVER_SEC` is what keeps that bounded.
    */
   const berthAfterSec = (stationId: StationId): number =>
     (facts.tracksOf.get(stationId) ?? []).some((t) => t.usage === 'stabling')
@@ -285,8 +292,6 @@ export function buildOimachiProject(): ProjectDocument {
    * the sweep or the road will already be gone when the 回送 is pathed.
    */
   const CHAIN_END_RESERVE_SEC = DEPOT_TURN_MARGIN_SEC;
-  /**
-   */
   for (const pool of pools) {
     for (const chain of pool.chains) {
       const first = chain[0]!;
