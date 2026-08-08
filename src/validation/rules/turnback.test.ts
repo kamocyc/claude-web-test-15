@@ -6,7 +6,7 @@ import { expectIssue, idsFor, issuesFor } from '../testkit';
 const H = 3600;
 const M = 60;
 
-/** 各停 arrives at D 08:10; 回8002 leaves D at `dep`. */
+/** 各停 arrives at D 08:10:30; 回8002 leaves D at `dep`. */
 function withTurnbackAt(dep: number): ReturnType<typeof toyProjectCopy> {
   const doc = toyProjectCopy();
   doc.trains.byId[TOY.depotIn]!.stops[0]!.dep = dep;
@@ -21,7 +21,7 @@ describe('turnback.insufficient', () => {
   });
 
   it('fires below the station minimum turnback time', () => {
-    const doc = withTurnbackAt(8 * H + 11 * M); // 60 s, minimum is 180
+    const doc = withTurnbackAt(8 * H + 11 * M + 30); // 60 s, minimum is 180
     const issue = expectIssue(
       doc,
       'turnback.insufficient',
@@ -33,7 +33,7 @@ describe('turnback.insufficient', () => {
   });
 
   it('is silent exactly at the minimum', () => {
-    expect(idsFor(withTurnbackAt(8 * H + 13 * M), 'turnback.insufficient')).toEqual([]);
+    expect(idsFor(withTurnbackAt(8 * H + 13 * M + 30), 'turnback.insufficient')).toEqual([]);
   });
 });
 
@@ -79,5 +79,54 @@ describe('turnback.trackNotCapable', () => {
     doc.stationTracks.byId[TOY.a1]!.canTurnBack = false;
     // 回8001 (down) into A then 各停 (down) out of A is not a turnback.
     expect(issuesFor(doc, 'turnback.trackNotCapable')).toEqual([]);
+  });
+});
+
+describe('turnback.trackChanged', () => {
+  it('does not fire on the clean fixture (101 and 回8002 both use D 1番線)', () => {
+    expect(issuesFor(toyProject(), 'turnback.trackChanged')).toEqual([]);
+  });
+
+  it('errors where the station has no siding to shunt through', () => {
+    const doc = toyProjectCopy();
+    // 101 arrives on D 1番線, 回8002 now leaves from D 2番線, and the berth in
+    // between still claims 1番線: the stock is asserted to have teleported.
+    doc.trains.byId[TOY.depotIn]!.stops[0]!.trackId = TOY.d2;
+    const issue = expectIssue(
+      doc,
+      'turnback.trackChanged',
+      'turnback.trackChanged#dut-1|trn-1|trn-4',
+      'error',
+    );
+    expect(issue.detail).toContain('D駅 1番線');
+    expect(issue.detail).toContain('D駅 2番線');
+    expect(issue.detail).toContain('引上線も留置線もなく');
+  });
+
+  it('downgrades to a warning where a stabling road exists', () => {
+    const doc = toyProjectCopy();
+    doc.trains.byId[TOY.depotIn]!.stops[0]!.trackId = TOY.d2;
+    doc.stationTracks.byId[TOY.d2]!.usage = 'stabling';
+    const issue = expectIssue(
+      doc,
+      'turnback.trackChanged',
+      'turnback.trackChanged#dut-1|trn-1|trn-4',
+      'warning',
+    );
+    expect(issue.detail).toContain('移動自体は可能');
+  });
+
+  it('accepts the change when a stabling leg models the move', () => {
+    const doc = toyProjectCopy();
+    doc.trains.byId[TOY.depotIn]!.stops[0]!.trackId = TOY.d2;
+    const leg = doc.duties.byId[TOY.dutyLocal]!.legs[2]!;
+    if (leg.kind === 'stable') leg.trackId = TOY.d2;
+    expect(issuesFor(doc, 'turnback.trackChanged')).toEqual([]);
+  });
+
+  it('says nothing when a road is simply unassigned', () => {
+    const doc = toyProjectCopy();
+    delete doc.trains.byId[TOY.depotIn]!.stops[0]!.trackId;
+    expect(issuesFor(doc, 'turnback.trackChanged')).toEqual([]);
   });
 });

@@ -8,6 +8,7 @@
  * 待避/接続 list, so the dialog lists what it is about to touch.
  */
 
+import { useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import type { DayTypeId, TrainTypeId } from '@/domain/ids';
@@ -41,6 +42,7 @@ export function TrainEditor({
   onRequestDelete(): void;
 }) {
   const dispatch = useDispatch();
+  const [shiftMinutes, setShiftMinutes] = useState('1');
 
   if (train === undefined) {
     return (
@@ -166,6 +168,32 @@ export function TrainEditor({
             }}
           />
         </Field>
+      </div>
+
+      <div className={styles.form}>
+        <Field label="時刻移動(分)">
+          <input
+            className={styles.narrow}
+            data-testid={TID.trainShiftMinutes}
+            value={shiftMinutes}
+            inputMode="numeric"
+            onChange={(e) => setShiftMinutes(e.currentTarget.value)}
+          />
+        </Field>
+        <button
+          type="button"
+          data-testid={TID.trainShiftApply}
+          onClick={() => {
+            const minutes = numberOrUndefined(shiftMinutes);
+            if (minutes === undefined || minutes === 0) return;
+            dispatch({ type: 'train/shift', trainIds: [train.id], deltaSec: minutes * 60 });
+          }}
+        >
+          この列車をずらす
+        </button>
+        <span className={styles.hint}>
+          負の値で繰り上げ。着発すべてを同じだけ動かします。
+        </span>
       </div>
 
       <div className={styles.chipRow}>

@@ -526,9 +526,19 @@ export function StationsScreen() {
               </tbody>
             </table>
           </div>
-          <p className={styles.hint}>
-            所要時間を入力すると既定の性能 (標準性能) が自動で作成されます。
-          </p>
+          <div className={styles.form}>
+            <button
+              type="button"
+              data-testid={TID.linkRebuild}
+              onClick={() => dispatch({ type: 'link/rebuild' })}
+              disabled={stations.length < 2}
+            >
+              駅間を再構築
+            </button>
+            <span className={styles.hint}>
+              所要時間を入力すると既定の性能 (標準性能) が自動で作成されます。駅を直接編集して駅間がずれたときは再構築してください。
+            </span>
+          </div>
         </Card>
 
         <DepotEditor stations={stations} depots={depots} />

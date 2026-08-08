@@ -41,14 +41,14 @@ describe('buildIndex', () => {
     expect(local.label).toBe('各 101');
     expect(local.distance).toBe(3000);
     expect(local.startSec).toBe(8 * H);
-    expect(local.endSec).toBe(8 * H + 10 * M);
+    expect(local.endSec).toBe(8 * H + 10 * M + 30);
   });
 
   it('sets TrainEvent.at to arr ?? dep and keeps events sorted', () => {
     const local = idx.timelines.get(TOY.localDown)!;
     expect(local.events[0]!.at).toBe(8 * H); // origin: dep
     expect(local.events[0]!.arr).toBeUndefined();
-    expect(local.events[3]!.at).toBe(8 * H + 10 * M); // terminus: arr
+    expect(local.events[3]!.at).toBe(8 * H + 10 * M + 30); // terminus: arr
     const ats = local.events.map((e) => e.at);
     expect([...ats].sort((a, b) => a - b)).toEqual(ats);
   });
@@ -105,9 +105,9 @@ describe('buildIndex', () => {
     expect(c2[0]).toMatchObject({
       trainId: TOY.localDown,
       bookedFrom: 8 * H + 4 * M,
-      bookedTo: 8 * H + 8 * M,
+      bookedTo: 8 * H + 8 * M + 30,
       from: 8 * H + 4 * M - 45,
-      to: 8 * H + 8 * M + 30,
+      to: 8 * H + 8 * M + 60,
     });
     // The origin has no arrival: its departure stands in for both ends.
     const x1 = idx.trackIntervals.get(TOY.x1)!;

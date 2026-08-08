@@ -13,7 +13,12 @@
  *      2 trk  1 trk  3 trk  2 trk
  *                    (待避)
  *
- * Station C has a passing loop, so an express can overtake a local there.
+ * Station C has a passing loop, so an express can overtake a local there. The
+ * express *calls* at C on the through road while the local stands aside on the
+ * loop: a cross-platform 緩急接続, which is what makes C a connection point.
+ * A 待避 where the faster train runs straight through is a spacing move and
+ * carries no connection — that case is deliberately not what this fixture
+ * models, because `detectConnections` must reject it.
  */
 
 import { ID_PREFIX, asId } from '@/domain/ids';
@@ -178,7 +183,8 @@ function stop(
 /**
  * The base fixture. Times are chosen so that:
  *   - every section run time exactly meets its minimum plus slack,
- *   - the local waits at C from 08:04 to 08:08 and the express passes at 08:06,
+ *   - the local waits at C from 08:04 to 08:08:30 while the express calls there
+ *     08:06:00–08:06:30 on the other face of the island,
  *   - both duties begin with a 出庫 and end with an 入庫.
  */
 export function toyProject(): ProjectDocument {
@@ -309,15 +315,17 @@ export function toyProject(): ProjectDocument {
       entries: {
         [TOY.stationA]: 'stop',
         [TOY.stationB]: 'pass',
-        [TOY.stationC]: 'pass',
+        // Calls at C — that is the whole point of the 待避 on the loop.
+        [TOY.stationC]: 'stop',
         [TOY.stationD]: 'stop',
       },
     },
   ];
 
   // -- trains ---------------------------------------------------------------
-  // Local: A 08:00 dep, B 08:01:30, C 08:04 arr / 08:08 dep (waits for the
-  // express, which passes at 08:06), D 08:10 arr.
+  // Local: A 08:00 dep, B 08:01:30, C 08:04:00 arr / 08:08:30 dep (waits for
+  // the express, which calls 08:06:00–08:06:30), D 08:10:30 arr. The 30 s
+  // margin on the C departure is the 120 s link headway behind the express.
   const localDown: Train = {
     id: TOY.localDown,
     number: '101',
@@ -329,14 +337,15 @@ export function toyProject(): ProjectDocument {
     stops: [
       stop(TOY.stationA, TOY.a1, undefined, 8 * H),
       stop(TOY.stationB, TOY.b1, 8 * H + 90, 8 * H + 120),
-      stop(TOY.stationC, TOY.c2, 8 * H + 4 * M, 8 * H + 8 * M, {
+      stop(TOY.stationC, TOY.c2, 8 * H + 4 * M, 8 * H + 8 * M + 30, {
         overtakenBy: [TOY.expressDown],
       }),
-      stop(TOY.stationD, TOY.d1, 8 * H + 10 * M, undefined),
+      stop(TOY.stationD, TOY.d1, 8 * H + 10 * M + 30, undefined),
     ],
   };
 
-  // Express: A 08:03 dep, passes B 08:04:10 and C 08:06, D 08:07:30 arr.
+  // Express: A 08:03 dep, passes B 08:04:20, calls C 08:06:00–08:06:30,
+  // D 08:08:00 arr (C->D is exactly the 90 s minimum).
   const expressDown: Train = {
     id: TOY.expressDown,
     number: '201',
@@ -349,8 +358,8 @@ export function toyProject(): ProjectDocument {
       stop(TOY.stationA, TOY.a1, undefined, 8 * H + 3 * M),
       // 80s from A: base 70 + 10s start penalty (the origin is a stand).
       { stationId: TOY.stationB, trackId: TOY.b1, arr: 8 * H + 4 * M + 20, dep: 8 * H + 4 * M + 20, kind: 'pass' },
-      { stationId: TOY.stationC, trackId: TOY.c1, arr: 8 * H + 6 * M, dep: 8 * H + 6 * M, kind: 'pass' },
-      stop(TOY.stationD, TOY.d2, 8 * H + 7 * M + 30, undefined),
+      stop(TOY.stationC, TOY.c1, 8 * H + 6 * M, 8 * H + 6 * M + 30),
+      stop(TOY.stationD, TOY.d2, 8 * H + 8 * M, undefined),
     ],
   };
 
@@ -392,7 +401,7 @@ export function toyProject(): ProjectDocument {
       legs: [
         { kind: 'train', trainId: TOY.depotOut },
         { kind: 'train', trainId: TOY.localDown },
-        { kind: 'stable', stationId: TOY.stationD, trackId: TOY.d1, from: 8 * H + 10 * M, to: 8 * H + 20 * M },
+        { kind: 'stable', stationId: TOY.stationD, trackId: TOY.d1, from: 8 * H + 10 * M + 30, to: 8 * H + 20 * M },
         { kind: 'train', trainId: TOY.depotIn },
       ],
       requiredCars: 6,

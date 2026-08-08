@@ -29,8 +29,9 @@ describe('buildTrackIntervals', () => {
     const originOnly = map.get(TOY.x1)!.find((i) => i.trainId === TOY.depotOut)!;
     expect(originOnly.bookedFrom).toBe(originOnly.bookedTo);
     const terminusOnly = map.get(TOY.d1)!.find((i) => i.trainId === TOY.localDown)!;
-    expect(terminusOnly.bookedFrom).toBe(8 * H + 10 * M);
-    expect(terminusOnly.bookedTo).toBe(8 * H + 10 * M);
+    expect(terminusOnly.bookedFrom).toBe(8 * H + 10 * M + 30);
+    // The stabling leg names D1, so the arrival road is released at once.
+    expect(terminusOnly.bookedTo).toBe(8 * H + 10 * M + 30);
   });
 
   it('lists every known track, even the empty ones', () => {
@@ -48,8 +49,8 @@ describe('buildTrackIntervals', () => {
 
   it('holds the road until the next train of the duty leaves on a turnback', () => {
     const doc = toyProjectCopy();
-    const local = doc.trains.byId[TOY.localDown]!;
-    local.stops[3]!.operation = 'turnback';
+    // No `operation: 'turnback'` flag anywhere: the hold is derived from the
+    // duty, so a document that never sets the flag still books the road.
     // Drop the stabling leg so the 入庫 is the next train leg of duty 01.
     doc.duties.byId[TOY.dutyLocal]!.legs.splice(2, 1);
     const list = intervals(doc).get(TOY.d1)!;
@@ -58,10 +59,25 @@ describe('buildTrackIntervals', () => {
     expect(held.to).toBe(8 * H + 20 * M + 30);
   });
 
-  it('does not extend a terminus that is not marked as a turnback', () => {
+  it('books a stabling leg on the road it names, not on the arrival road', () => {
     const list = intervals().get(TOY.d1)!;
-    const plain = list.find((i) => i.trainId === TOY.localDown)!;
-    expect(plain.bookedTo).toBe(8 * H + 10 * M);
+    // 101 arrives 08:10:30 and the berth runs to the 入庫 at 08:20.
+    const arrival = list.find(
+      (i) => i.trainId === TOY.localDown && i.bookedFrom === 8 * H + 10 * M + 30,
+    )!;
+    expect(arrival.bookedTo).toBe(8 * H + 10 * M + 30);
+    const stabled = list.find((i) => i.bookedTo === 8 * H + 20 * M)!;
+    expect(stabled.trainId).toBe(TOY.localDown);
+    expect(stabled.bookedFrom).toBe(8 * H + 10 * M + 30);
+  });
+
+  it('holds the arrival road when a stabling leg names no berth', () => {
+    const doc = toyProjectCopy();
+    const leg = doc.duties.byId[TOY.dutyLocal]!.legs[2]!;
+    if (leg.kind === 'stable') delete leg.trackId;
+    const list = intervals(doc).get(TOY.d1)!;
+    const held = list.find((i) => i.trainId === TOY.localDown)!;
+    expect(held.bookedTo).toBe(8 * H + 20 * M);
   });
 
   it('skips stops with no road assigned', () => {

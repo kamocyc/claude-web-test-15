@@ -98,6 +98,9 @@ function waitFor(at: StationKey, by: string, cycleDelta?: number): Pick<SlotDef,
   return { overtakes: [ov], connectsWith: [cn] };
 }
 
+/** 鷺沼〜溝の口 run time: a 鷺沼発 slot leaves this much earlier. */
+const SAGINUMA_LEAD_SEC = 490;
+
 const THROUGH_NOTE = '田園都市線直通 長津田行き（本モデルでは鷺沼止まり）';
 
 /** The shared 15-minute grid. Bands pick a subset of these slots. */
@@ -106,11 +109,10 @@ const GRID = {
   d2: 250,
   d3: 450,
   d4: 660,
-  u1: 0,
-  u2: 300,
-  u3: 480,
-  u4: 660,
-  u5: 800,
+  u1: 430,
+  u2: 730,
+  u3: 120,
+  u4: 850,
 } as const;
 
 const BAND_DEFS: readonly BandDef[] = [
@@ -168,21 +170,6 @@ const BAND_DEFS: readonly BandDef[] = [
       { id: 'u2', offsetSec: GRID.u2, patternKey: 'expressUp' },
       { id: 'u3', offsetSec: GRID.u3, patternKey: 'blueUp' },
       { id: 'u4', offsetSec: GRID.u4, patternKey: 'greenUp' },
-      // u5 stands aside at 上野毛 for over eight minutes, which is long enough
-      // that the NEXT cycle's u1 — an ordinary 各停 that does not wait here —
-      // also goes past it. That is a perfectly legal second overtake on a
-      // legal 待避線, so it is declared too. No 緩急接続 goes with it: the two
-      // trains are the same product, so there is nothing to transfer to.
-      {
-        id: 'u5',
-        offsetSec: GRID.u5,
-        patternKey: 'greenUp',
-        overtakes: [
-          { at: 'kaminoge', by: 'u2', cycleDelta: 1 },
-          { at: 'kaminoge', by: 'u1', cycleDelta: 1 },
-        ],
-        connectsWith: [{ at: 'kaminoge', withSlot: 'u2', cycleDelta: 1 }],
-      },
     ],
   },
   // -------------------------------------------------------------- 逓減
@@ -236,11 +223,11 @@ const BAND_DEFS: readonly BandDef[] = [
       // Read from u1's side that makes the 急行 that passes it the PREVIOUS
       // cycle's u2 — hence `cycleDelta: -1`. The very first cycle of the band
       // has no such 急行 and simply runs clear.
-      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2', -1) },
+      { id: 'u1', offsetSec: GRID.u1, patternKey: 'greenUp', ...waitFor('hatanodai', 'u2') },
       {
         id: 'u2',
-        offsetSec: 710,
-        windowOffsetSec: 1200,
+        offsetSec: GRID.u2 - SAGINUMA_LEAD_SEC,
+        windowOffsetSec: GRID.u2,
         patternKey: 'expressUpSaginuma',
         note: THROUGH_NOTE,
       },

@@ -52,6 +52,7 @@ import {
 import {
   turnbackInsufficient,
   turnbackTight,
+  turnbackTrackChanged,
   turnbackTrackNotCapable,
 } from './rules/turnback';
 import type { Rule, RuleId } from './types';
@@ -78,6 +79,7 @@ export const RULES: Record<RuleId, Rule> = {
   'turnback.insufficient': turnbackInsufficient,
   'turnback.tight': turnbackTight,
   'turnback.trackNotCapable': turnbackTrackNotCapable,
+  'turnback.trackChanged': turnbackTrackChanged,
 
   'duty.continuityBreak': dutyContinuityBreak,
   'duty.emptyOrUnassigned': dutyEmptyOrUnassigned,

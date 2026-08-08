@@ -29,7 +29,7 @@ import { SeedError } from '../errors';
 import { NO_OIMACHI_PLATFORM_KEYS, type Facts, type StationKey } from '../oimachi/facts';
 import { timeRoute, type RouteStop } from './stopTimes';
 import type { DutyNode } from './dutyMatch';
-import type { AssignableTrain, TrackBooking } from './trackAssign';
+import type { AssignableTrain, PinnedEnd, TrackBooking } from './trackAssign';
 
 /** Margin between a service train arriving and its 入庫回送 setting off. */
 export const DEPOT_TURN_MARGIN_SEC = 300;
@@ -136,11 +136,28 @@ function makeStops(
   });
 }
 
+/**
+ * The road each empty move shares with the service train it hands over to.
+ *
+ * A 出庫 that terminates where its first service train starts is a 折り返し
+ * like any other: one formation, one road, one continuous occupation. Pinning
+ * it is what keeps the 構内ダイヤ honest at 大井町, where the two dead-end
+ * roads are the only places a formation can be and there is no way across
+ * between them.
+ */
+export interface DepotRunPins {
+  /** Road + departure instant of the first service train of the chain. */
+  outTerminus?: PinnedEnd;
+  /** Road + arrival instant of the last service train of the chain. */
+  inOrigin?: PinnedEnd;
+}
+
 /** Build the 出庫 and 入庫 that bracket one chain of service trains. */
 export function buildDepotRuns(
   ctx: DepotRunContext,
   chain: readonly DutyNode[],
   cars: number,
+  pins: DepotRunPins = {},
 ): DepotRunPair {
   const { facts, depot } = ctx;
   const first = chain[0];
@@ -174,10 +191,11 @@ export function buildDepotRuns(
     idealStart: outIdeal,
     stepSign: -1,
     markFirst: 'depotOut',
-    markLast: undefined,
+    markLast: pins.outTerminus === undefined ? undefined : 'turnback',
     note: '出庫回送',
     preferStablingAtOrigin: false,
     label: `回 ${outNumber}`,
+    ...(pins.outTerminus === undefined ? {} : { pinnedTerminus: pins.outTerminus }),
   });
 
   // -- 入庫: ideal, then progressively later --------------------------------
@@ -198,9 +216,12 @@ export function buildDepotRuns(
     markFirst: undefined,
     markLast: 'depotIn',
     note: '入庫回送',
-    // The last movement of the night out of 溝の口 starts from the 引上線.
-    preferStablingAtOrigin: true,
+    // The last movement of the night out of 溝の口 starts from the 引上線 —
+    // unless the formation is reversing straight off an arriving service
+    // train, in which case it stays on the road that train is already holding.
+    preferStablingAtOrigin: pins.inOrigin === undefined,
     label: `回 ${inNumber}`,
+    ...(pins.inOrigin === undefined ? {} : { pinnedOrigin: pins.inOrigin }),
   });
 
   const outLast = out.train.stops[out.train.stops.length - 1]!;
@@ -238,6 +259,8 @@ interface PathRequest {
   markLast: TrainStop['operation'] | undefined;
   note: string;
   preferStablingAtOrigin: boolean;
+  pinnedOrigin?: PinnedEnd;
+  pinnedTerminus?: PinnedEnd;
 }
 
 function searchPath(
@@ -258,6 +281,8 @@ function searchPath(
       isPassenger: false,
       preferStablingAtOrigin: req.preferStablingAtOrigin,
       stops,
+      ...(req.pinnedOrigin === undefined ? {} : { pinnedOrigin: req.pinnedOrigin }),
+      ...(req.pinnedTerminus === undefined ? {} : { pinnedTerminus: req.pinnedTerminus }),
     };
     if (!booking.tryPlace(candidate, DEADHEAD_HEADWAY_SEC)) continue;
     const train: Train = {

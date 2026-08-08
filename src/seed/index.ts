@@ -45,12 +45,30 @@ import { buildFacts, CARS, SERIES_SPECS, type Facts, type SeriesSpec } from './o
 import { buildServicePlan } from './oimachi/service';
 import { expandBands } from './generator/expand';
 import { buildStopTimes, toTrainStops } from './generator/stopTimes';
-import { TrackBooking, type AssignableTrain } from './generator/trackAssign';
+import {
+  TrackBooking,
+  type AssignableTrain,
+  type Routing,
+  type TurnbackLink,
+} from './generator/trackAssign';
 import { minimumPathCover, type DutyNode } from './generator/dutyMatch';
-import { buildDepotRuns, checkDepotCapacity, DEPOT_TURN_MARGIN_SEC } from './generator/depotRuns';
+import {
+  buildDepotRuns,
+  checkDepotCapacity,
+  DEPOT_TURN_MARGIN_SEC,
+  type DepotRunPins,
+} from './generator/depotRuns';
 
 /** Beyond this a formation goes back to the depot instead of waiting. */
 const MAX_LAYOVER_SEC = 2400;
+/**
+ * 大井町 is 頭端式1面2線 — two dead-end roads, no siding, no tail track — so a
+ * formation waiting there is a platform out of service. Two roads at 50 s of
+ * approach + clear absorb `2 × 3600 / (layover + 50)` turnbacks an hour; ten
+ * minutes therefore supports 11 本/時 per road, comfortably above the 20 本/時
+ * the 朝ラッシュ asks of the pair. Anything longer runs 入庫 to 鷺沼 instead.
+ */
+const OIMACHI_MAX_LAYOVER_SEC = 1100;
 /** A layover longer than this becomes an explicit `stable` leg in the duty. */
 const STABLE_LEG_MIN_SEC = 1200;
 /** Depot time a formation needs between two duties on the same day. */
@@ -126,14 +144,12 @@ export function buildOimachiProject(): ProjectDocument {
     return train;
   });
 
-  // -- 2. 番線 for the service pattern -------------------------------------
-  // Service trains are booked first, as a block: they are the timetable, and
-  // the empty moves have to fit around them rather than the other way round.
-  const typeById = new Map(facts.trainTypes.map((t) => [t.id, t]));
-  const booking = new TrackBooking(facts);
-  booking.placeSweep(serviceTrains.map((train) => toAssignable(train, typeById, facts)));
-
-  // -- 3. duty chains -------------------------------------------------------
+  // -- 2. duty chains -------------------------------------------------------
+  // Chains are solved BEFORE the 番線, not after. Which arrival works which
+  // departure is what decides whether a formation reverses in place or has to
+  // cross to the other face of the platform, and at 大井町 — 頭端式1面2線, no
+  // tail track — it cannot cross. The 構内ダイヤ therefore has to be built
+  // knowing the roster, not the other way round.
   const nodes: DutyNode[] = serviceTrains.map((train, i) => {
     const spec = specs[i]!;
     const first = train.stops[0]!;
@@ -151,6 +167,7 @@ export function buildOimachiProject(): ProjectDocument {
       depSec: first.dep,
       arrSec: last.arr,
       cars: spec.cars,
+      routing: routingOf(train, facts),
     };
   });
 
@@ -173,15 +190,62 @@ export function buildOimachiProject(): ProjectDocument {
       preferredTurnback,
     );
 
+  /**
+   * How long a formation may stand at a terminal before the plan sends it home
+   * instead. A layover is not free: it books a road for its whole length.
+   *
+   * 大井町 is the binding case. Two dead-end platform roads, no siding, no tail
+   * track — so with an approach/clear margin of 50 s the terminal can absorb
+   * `2 × 3600 / (layover + 50)` turnbacks an hour and not one more. At the peak
+   * density that leaves room for about ten minutes, and anything longer has to
+   * leave: the chain is cut and the formation runs 入庫 to 鷺沼. Everywhere
+   * else there is either a 引上線 (溝の口) or plenty of platform (鷺沼), so the
+   * old blanket 40 minutes still applies.
+   */
+  const terminalLayoverCap = (stationId: StationId): number =>
+    stationId === facts.S.oimachi ? OIMACHI_MAX_LAYOVER_SEC : MAX_LAYOVER_SEC;
+
   const pools: Array<{ cars: number; chains: DutyNode[][] }> = [CARS.express, CARS.local].map(
     (cars) => ({
       cars,
       chains: minimumPathCover(
         nodes.filter((n) => n.cars === cars),
-        { turnaroundSec, maxLayoverSec: MAX_LAYOVER_SEC },
+        { turnaroundSec, maxLayoverSec: terminalLayoverCap },
       ).chains,
     }),
   );
+
+  // -- 3. 番線 for the service pattern -------------------------------------
+  // Service trains are booked first, as a block: they are the timetable, and
+  // the empty moves have to fit around them rather than the other way round.
+  // Each short turnback inside a chain is booked as ONE occupation of ONE road:
+  // the formation reverses in place, which is the only thing a stub terminal
+  // can do.
+  const typeById = new Map(facts.trainTypes.map((t) => [t.id, t]));
+  const booking = new TrackBooking(facts);
+  const assignables = new Map<TrainId, AssignableTrain>();
+  for (const train of serviceTrains) {
+    assignables.set(train.id, toAssignable(train, typeById, facts));
+  }
+  const turnbackLinks: TurnbackLink[] = [];
+  for (const pool of pools) {
+    for (const chain of pool.chains) {
+      for (let i = 0; i + 1 < chain.length; i++) {
+        const a = chain[i]!;
+        const b = chain[i + 1]!;
+        if (a.terminusStationId !== b.originStationId) continue;
+        // A long layover is not an in-place reversal: the formation is berthed
+        // somewhere in between, and `stable` legs below say where.
+        if (b.depSec - a.arrSec >= STABLE_LEG_MIN_SEC) continue;
+        turnbackLinks.push({ arrivingTrainId: a.trainId, departingTrainId: b.trainId });
+        // Authored intent, for the 折り返し dwell reason and the yard view. The
+        // occupancy model deliberately does not depend on it — see occupancy.ts.
+        const arriving = assignables.get(a.trainId)!.stops;
+        arriving[arriving.length - 1]!.operation = 'turnback';
+      }
+    }
+  }
+  booking.placeSweep([...assignables.values()], turnbackLinks);
 
   // -- 4. depot runs + duties ----------------------------------------------
   const saginuma = facts.depots[0]!;
@@ -192,9 +256,50 @@ export function buildOimachiProject(): ProjectDocument {
   const dutySpans: Array<{ dutyId: DutyId; cars: number; from: Sec; to: Sec }> = [];
   let maxDepotShiftSec = 0;
 
+  /**
+   * A `stable` leg is a formation standing on a specific road, so it has to
+   * name one — 96 of them named none, which meant 96 stabled formations that
+   * occupied nothing and conflicted with nobody. `placeBerth` books a 引上線
+   * where the station has one and reports failure where it does not, and a
+   * berth it cannot find is an error rather than a silence.
+   */
+  const berth = (
+    stationId: StationId,
+    trainId: TrainId,
+    cars: number,
+    from: Sec,
+    to: Sec,
+  ): DutyLeg => {
+    const trackId = booking.placeBerth(stationId, trainId, cars, from, to);
+    if (trackId === undefined) {
+      throw new SeedError('留置する番線がありません', {
+        station: facts.stationById.get(stationId)?.name ?? String(stationId),
+        from,
+        to,
+      });
+    }
+    return { kind: 'stable', stationId, trackId, from, to };
+  };
+
   for (const pool of pools) {
     const suffix = pool.cars === CARS.express ? 'Q' : 'K';
     pool.chains.forEach((chain, index) => {
+      const first = chain[0]!;
+      const last = chain[chain.length - 1]!;
+      const firstStops = assignables.get(first.trainId)!.stops;
+      const lastStops = assignables.get(last.trainId)!.stops;
+      const firstTrackId = firstStops[0]!.trackId;
+      const lastTrackId = lastStops[lastStops.length - 1]!.trackId;
+      // The empty moves reverse in place against the chain they bracket, just
+      // like two service trains do: one formation, one road.
+      const pins: DepotRunPins = {};
+      if (firstTrackId !== undefined) {
+        pins.outTerminus = { trainId: first.trainId, trackId: firstTrackId, at: first.depSec };
+      }
+      if (lastTrackId !== undefined) {
+        pins.inOrigin = { trainId: last.trainId, trackId: lastTrackId, at: last.arrSec };
+      }
+
       const runs = buildDepotRuns(
         {
           facts,
@@ -205,6 +310,7 @@ export function buildOimachiProject(): ProjectDocument {
         },
         chain,
         pool.cars,
+        pins,
       );
       maxDepotShiftSec = Math.max(maxDepotShiftSec, runs.outShiftSec, runs.inShiftSec);
       deadheadTrains.push(runs.out, runs.in);
@@ -213,20 +319,34 @@ export function buildOimachiProject(): ProjectDocument {
       const outLast = runs.out.stops[runs.out.stops.length - 1]!;
       let prevEnd: Sec = outLast.arr ?? outLast.dep ?? runs.fromSec;
       let prevStation: StationId = outLast.stationId;
+      let prevTrainId: TrainId = runs.out.id;
 
-      for (const node of chain) {
+      chain.forEach((node, nodeIndex) => {
         if (node.depSec - prevEnd >= STABLE_LEG_MIN_SEC) {
-          legs.push({ kind: 'stable', stationId: prevStation, from: prevEnd, to: node.depSec });
+          // The 出庫 is pinned to the road its first train leaves from, so the
+          // wait after it needs no berth of its own — it is already booked.
+          const pinned = nodeIndex === 0 ? firstTrackId : undefined;
+          legs.push(
+            pinned === undefined
+              ? berth(prevStation, prevTrainId, pool.cars, prevEnd, node.depSec)
+              : { kind: 'stable', stationId: prevStation, trackId: pinned, from: prevEnd, to: node.depSec },
+          );
         }
         legs.push({ kind: 'train', trainId: node.trainId });
         prevEnd = node.arrSec;
         prevStation = node.terminusStationId;
-      }
+        prevTrainId = node.trainId;
+      });
 
       const inFirst = runs.in.stops[0]!;
       const inDep = inFirst.dep ?? inFirst.arr ?? prevEnd + DEPOT_TURN_MARGIN_SEC;
       if (inDep - prevEnd >= STABLE_LEG_MIN_SEC) {
-        legs.push({ kind: 'stable', stationId: prevStation, from: prevEnd, to: inDep });
+        // Likewise the 入庫 is pinned to the road its last train arrived on.
+        legs.push(
+          lastTrackId === undefined
+            ? berth(prevStation, prevTrainId, pool.cars, prevEnd, inDep)
+            : { kind: 'stable', stationId: prevStation, trackId: lastTrackId, from: prevEnd, to: inDep },
+        );
       }
       legs.push({ kind: 'train', trainId: runs.in.id });
 
@@ -335,6 +455,11 @@ export function buildOimachiProject(): ProjectDocument {
   };
 }
 
+/** 青各停 work the 田園都市線 pair through the 二子玉川〜溝の口 quad section. */
+function routingOf(train: Train, facts: Facts): Routing {
+  return train.typeId === facts.type.localBlue ? 'dt' : 'om';
+}
+
 function toAssignable(
   train: Train,
   typeById: ReadonlyMap<string, { shortName: string; isPassengerService: boolean }>,
@@ -346,7 +471,7 @@ function toAssignable(
     label: `${type?.shortName ?? '?'} ${train.number}`,
     direction: train.direction,
     cars: train.minCars ?? CARS.local,
-    routing: train.typeId === facts.type.localBlue ? 'dt' : 'om',
+    routing: routingOf(train, facts),
     isPassenger: type?.isPassengerService ?? true,
     preferStablingAtOrigin: train.stops[train.stops.length - 1]?.operation === 'depotIn',
     stops: train.stops,

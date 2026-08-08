@@ -124,7 +124,9 @@ describe('trainRuntimeAt', () => {
   });
 
   it('is finished after the terminus arrival', () => {
-    expect(trainRuntimeAt(local, 8 * H + 10 * M + 1, NO_DELAY, doc).phase.phase).toBe('finished');
+    expect(trainRuntimeAt(local, 8 * H + 10 * M + 31, NO_DELAY, doc).phase.phase).toBe(
+      'finished',
+    );
   });
 
   it('dwells exactly at the booked arrival, not runs', () => {
@@ -133,17 +135,17 @@ describe('trainRuntimeAt', () => {
     if (rt.phase.phase !== 'dwelling') throw new Error('unreachable');
     expect(rt.phase.stationId).toBe(TOY.stationC);
     expect(rt.phase.since).toBe(8 * H + 4 * M);
-    expect(rt.phase.until).toBe(8 * H + 8 * M);
+    expect(rt.phase.until).toBe(8 * H + 8 * M + 30);
     expect(rt.phase.reason).toBe('overtakeWait');
   });
 
   it('still dwells exactly at the booked departure', () => {
-    const rt = trainRuntimeAt(local, 8 * H + 8 * M, NO_DELAY, doc);
+    const rt = trainRuntimeAt(local, 8 * H + 8 * M + 30, NO_DELAY, doc);
     expect(rt.phase.phase).toBe('dwelling');
   });
 
   it('is running one second after the departure', () => {
-    const rt = trainRuntimeAt(local, 8 * H + 8 * M + 1, NO_DELAY, doc);
+    const rt = trainRuntimeAt(local, 8 * H + 8 * M + 31, NO_DELAY, doc);
     expect(rt.phase.phase).toBe('running');
     if (rt.phase.phase !== 'running') throw new Error('unreachable');
     expect(rt.phase.fromStationId).toBe(TOY.stationC);
@@ -163,10 +165,11 @@ describe('trainRuntimeAt', () => {
   });
 
   it('reports 通過 within the pass window', () => {
-    const rt = trainRuntimeAt(express, 8 * H + 6 * M + 3, NO_DELAY, doc);
+    // The express now CALLS at C, so B is the pass event to look at.
+    const rt = trainRuntimeAt(express, 8 * H + 4 * M + 23, NO_DELAY, doc);
     expect(rt.phase.phase).toBe('passing');
     if (rt.phase.phase !== 'passing') throw new Error('unreachable');
-    expect(rt.phase.stationId).toBe(TOY.stationC);
+    expect(rt.phase.stationId).toBe(TOY.stationB);
   });
 
   it('carries the formation through from the assignment', () => {

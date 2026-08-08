@@ -115,7 +115,8 @@ export function TypesScreen() {
             </button>
           </div>
 
-          <table className={styles.table} data-testid={TID.trainTypeList}>
+          <div className={styles.tableWrap}>
+            <table className={styles.table} data-testid={TID.trainTypeList}>
             <thead>
               <tr>
                 <th>名称</th>
@@ -195,6 +196,7 @@ export function TypesScreen() {
                   </td>
                   <td>
                     <select
+                      className={styles.medium}
                       data-testid={TID.trainTypeProfileSelect(type.id)}
                       value={type.perfProfileId}
                       aria-label={`${type.name} の性能`}
@@ -226,8 +228,9 @@ export function TypesScreen() {
                   </td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </Card>
 
         <PatternForm types={types} stations={stations} />
@@ -290,11 +293,11 @@ export function TypesScreen() {
                           </button>
                           {value === 'stop' ? (
                             <input
-                              className={styles.narrow}
+                              className={styles.tiny}
                               data-testid={TID.patternDwellCell(pattern.id, station.id)}
                               value={pattern.dwellOverrideSec?.[station.id] ?? ''}
                               inputMode="numeric"
-                              placeholder="停車秒"
+                              placeholder="秒"
                               aria-label={`${pattern.name} / ${station.name} の停車時分`}
                               onChange={(e) => {
                                 const seconds = numberOrUndefined(e.currentTarget.value);

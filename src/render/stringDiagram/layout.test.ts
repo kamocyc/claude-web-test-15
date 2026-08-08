@@ -58,15 +58,28 @@ describe('computeDiagramLayout — polylines', () => {
     expect(atC).toHaveLength(2);
     expect(atC[0]!.y).toBe(atC[1]!.y); // horizontal
     expect(atC[0]!.x).toBe(8 * H + 4 * M);
-    expect(atC[1]!.x).toBe(8 * H + 8 * M); // the four-minute 待避
+    expect(atC[1]!.x).toBe(8 * H + 8 * M + 30); // the 4.5-minute 待避
     expect(atC[1]!.isDwellEnd).toBe(true);
   });
 
-  it('emits a single vertex where a train passes without stopping', () => {
+  it('draws the overtaking express calling at C as its own dwell stub', () => {
+    // The fixture's express *calls* at C on the through road while the local
+    // stands aside on the loop — that cross-platform call is what makes C a
+    // 緩急接続 rather than a bare spacing 待避.
     const express = layout.trainById.get(TOY.expressDown)!;
     const atC = express.points.filter((p) => p.stationId === TOY.stationC);
-    expect(atC).toHaveLength(1);
+    expect(atC).toHaveLength(2);
     expect(atC[0]!.x).toBe(8 * H + 6 * M);
+    expect(atC[1]!.x).toBe(8 * H + 6 * M + 30);
+    expect(atC[0]!.y).toBe(atC[1]!.y);
+  });
+
+  it('emits a single vertex where a train passes without stopping', () => {
+    // B is the station the express genuinely runs through.
+    const express = layout.trainById.get(TOY.expressDown)!;
+    const atB = express.points.filter((p) => p.stationId === TOY.stationB);
+    expect(atB).toHaveLength(1);
+    expect(atB[0]!.x).toBe(8 * H + 4 * M + 20);
   });
 
   it('carries the type styling onto the line', () => {

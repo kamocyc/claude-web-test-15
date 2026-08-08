@@ -221,7 +221,7 @@
   background: var(--bg-panel-2);
 }
 
-/* -- the editors below the grid ------------------------------------------- */
+/* -- the 列車 / 停車設定 editors above the grid ---------------------------- */
 
 .editors {
   display: grid;
@@ -250,7 +250,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 168px;
+  max-height: 116px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 4px;

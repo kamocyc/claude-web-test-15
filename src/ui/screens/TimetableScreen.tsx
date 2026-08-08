@@ -301,6 +301,17 @@ export function TimetableScreen() {
         </span>
       </div>
 
+      <div className={styles.editors}>
+        <TrainEditor
+          doc={doc}
+          train={cursorTrain}
+          onRequestDelete={() => {
+            if (cursorTrain !== undefined) setDeleteTrainId(cursorTrain.id);
+          }}
+        />
+        <StopEditor doc={doc} train={cursorTrain} stopIndex={cursorStopIndex} />
+      </div>
+
       {stations.length === 0 ? (
         <p className={styles.empty}>
           駅がまだありません。「駅・線路」画面で駅を追加してください。
@@ -473,17 +484,6 @@ export function TimetableScreen() {
           </div>
         </div>
       )}
-
-      <div className={styles.editors}>
-        <TrainEditor
-          doc={doc}
-          train={cursorTrain}
-          onRequestDelete={() => {
-            if (cursorTrain !== undefined) setDeleteTrainId(cursorTrain.id);
-          }}
-        />
-        <StopEditor doc={doc} train={cursorTrain} stopIndex={cursorStopIndex} />
-      </div>
 
       {deleteTrain !== undefined ? (
         <TrainDeleteDialog

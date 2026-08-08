@@ -210,6 +210,8 @@ export const TID = {
   trainEditNote: 'train-edit-note',
   trainEditDayType: (dayTypeId: string) => `train-edit-day-type-${dayTypeId}`,
   trainHeaderNumber: (trainId: string) => `train-header-number-${trainId}`,
+  trainShiftMinutes: 'train-shift-minutes',
+  trainShiftApply: 'train-shift-apply',
   trainDelete: (trainId: string) => `train-delete-${trainId}`,
   trainDeleteDialog: 'train-delete-dialog',
   trainDeleteDependants: 'train-delete-dependants',
@@ -224,6 +226,7 @@ export const TID = {
   lineColorInput: 'line-color-input',
 
   // link extra fields --------------------------------------------------------
+  linkRebuild: 'link-rebuild',
   linkDistanceInput: 'link-distance-input',
   linkTrackCountSelect: 'link-track-count-select',
   linkMaxSpeedInput: 'link-max-speed-input',

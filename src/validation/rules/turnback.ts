@@ -5,8 +5,9 @@
  * service train leaving in the other direction is exactly the same check.
  */
 
+import type { StationTrackId } from '@/domain/ids';
 import type { Duty, Train } from '@/domain/model';
-import { dutiesForDayType, trainEndSec, trainStartSec } from '@/domain/project';
+import { dutiesForDayType, tracksOfStation, trainEndSec, trainStartSec } from '@/domain/project';
 import { formatDuration } from '@/domain/time';
 import { dayTypeIdFor } from '@/engine/buildIndex';
 import { dutyName, hhmmss, stationName, trackFullName, trainName } from '../helpers';
@@ -22,6 +23,8 @@ export interface TurnbackPair {
   depSec: number;
   availableSec: number;
   requiredSec: number;
+  /** Roads named by `stable` legs sitting between the two train legs. */
+  viaTrackIds: StationTrackId[];
 }
 
 /**
@@ -52,9 +55,17 @@ export function turnbackPairs(ctx: ValidationContext): TurnbackPair[] {
       const depSec = trainStartSec(departing);
       if (arrSec === undefined || depSec === undefined) continue;
       const station = ctx.doc.stations.byId[last.stationId];
+      const viaTrackIds: StationTrackId[] = [];
+      for (let k = prev.legIndex + 1; k < cur.legIndex; k++) {
+        const between = duty.legs[k];
+        if (between?.kind === 'stable' && between.trackId !== undefined) {
+          viaTrackIds.push(between.trackId);
+        }
+      }
       out.push({
         duty,
         legIndex: cur.legIndex,
+        viaTrackIds,
         arriving,
         departing,
         stationId: last.stationId,

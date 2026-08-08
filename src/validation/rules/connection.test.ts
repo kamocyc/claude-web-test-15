@@ -22,14 +22,43 @@ describe('connection.declaredFails', () => {
 
   it('fires when the declared partner is not there at all', () => {
     const doc = toyProjectCopy();
-    doc.trains.byId[TOY.localDown]!.stops[2]!.connectsTo = [TOY.depotIn];
+    // 回8001 never reaches C.
+    doc.trains.byId[TOY.localDown]!.stops[2]!.connectsTo = [TOY.depotOut];
     const issue = expectIssue(
       doc,
       'connection.declaredFails',
-      'connection.declaredFails#trn-1|2|trn-4|absent',
+      'connection.declaredFails#trn-1|2|trn-3|absent',
       'error',
     );
     expect(issue.detail).toContain('居合わせ');
+  });
+
+  it('fires when the declared partner runs through without stopping', () => {
+    const doc = toyProjectCopy();
+    doc.trains.byId[TOY.expressDown]!.stops[2]!.kind = 'pass';
+    doc.trains.byId[TOY.localDown]!.stops[2]!.connectsTo = [TOY.expressDown];
+    const issue = expectIssue(
+      doc,
+      'connection.declaredFails',
+      'connection.declaredFails#trn-1|2|trn-2|blocked',
+      'error',
+    );
+    expect(issue.detail).toContain('通過');
+  });
+
+  it('fires when the declared partner is no faster from here', () => {
+    const doc = toyProjectCopy();
+    // Two locals: same stopping pattern, so there is nothing to change to.
+    doc.trains.byId[TOY.expressDown]!.typeId = TOY.typeLocal;
+    doc.trains.byId[TOY.expressDown]!.stops[1]!.kind = 'stop';
+    doc.trains.byId[TOY.localDown]!.stops[2]!.connectsTo = [TOY.expressDown];
+    const issue = expectIssue(
+      doc,
+      'connection.declaredFails',
+      'connection.declaredFails#trn-1|2|trn-2|blocked',
+      'error',
+    );
+    expect(issue.detail).toContain('緩急接続');
   });
 
   it('fires when the transfer margin is below the minimum', () => {
@@ -77,15 +106,16 @@ describe('connection.qualityGap', () => {
 });
 
 describe('connection.discovered', () => {
-  it('reports the 緩急接続 the fixture is built around', () => {
+  it('reports one collapsed row per station, not one per pair', () => {
     const issue = expectIssue(
       toyProject(),
       'connection.discovered',
-      'connection.discovered#stn-3|trn-1|trn-2',
+      'connection.discovered#stn-3',
       'info',
     );
-    expect(issue.detail).toContain('2分');
-    expect(issue.detail).toContain('未申告');
+    expect(idsFor(toyProject(), 'connection.discovered')).toHaveLength(1);
+    expect(issue.detail).toContain('1 件');
+    expect(issue.detail).toContain('未申告 1');
   });
 
   it('reports nothing where there is no connection point', () => {
@@ -94,16 +124,17 @@ describe('connection.discovered', () => {
     expect(issuesFor(doc, 'connection.discovered')).toEqual([]);
   });
 
-  it('drops the 未申告 note once the connection is declared', () => {
+  it('counts the declaration once the connection is declared', () => {
     const doc = toyProjectCopy();
     doc.trains.byId[TOY.localDown]!.stops[2]!.connectsTo = [TOY.expressDown];
     const issue = expectIssue(
       doc,
       'connection.discovered',
-      'connection.discovered#stn-3|trn-1|trn-2',
+      'connection.discovered#stn-3',
       'info',
     );
-    expect(issue.detail).not.toContain('未申告');
+    expect(issue.detail).toContain('申告済 1');
+    expect(issue.detail).toContain('未申告 0');
   });
 
   it('says nothing about a transfer outside the window', () => {

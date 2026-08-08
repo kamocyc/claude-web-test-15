@@ -20,12 +20,12 @@ describe('computeYardLayout', () => {
     expect(layout.lanes.map((l) => l.canBeOvertaken)).toEqual([false, true, false]);
   });
 
-  it('places the 各停 bar on the 待避線 with its four-minute dwell', () => {
+  it('places the 各停 bar on the 待避線 with its 4.5-minute dwell', () => {
     const bar = layout.bars.find((b) => b.trainId === TOY.localDown);
     expect(bar).toBeDefined();
     expect(bar!.trackId).toBe(TOY.c2);
     expect(bar!.bookedFrom).toBe(8 * H + 4 * M);
-    expect(bar!.bookedTo).toBe(8 * H + 8 * M);
+    expect(bar!.bookedTo).toBe(8 * H + 8 * M + 30);
     expect(bar!.overtakeWait).toBe(true);
   });
 

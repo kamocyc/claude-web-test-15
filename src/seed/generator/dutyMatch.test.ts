@@ -26,10 +26,11 @@ function node(from: StationId, to: StationId, dep: number, arr: number, cars = 5
     depSec: dep,
     arrSec: arr,
     cars,
+    routing: 'om' as const,
   };
 }
 
-const opts = { turnaroundSec: () => 300, maxLayoverSec: 3600 };
+const opts = { turnaroundSec: () => 300, maxLayoverSec: () => 3600 };
 
 describe('minimumPathCover', () => {
   it('chains a there-and-back shuttle into a single duty', () => {

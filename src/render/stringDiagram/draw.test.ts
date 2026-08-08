@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TOY } from '@/testing/toyProject';
+import { TOY, toyProject } from '@/testing/toyProject';
 import { FIXTURE_T, sampleScene } from '../__fixtures__/sampleScene';
 import { createCamera } from '../canvas/camera';
 import { createRecordingContext } from '../canvas/recordingContext';
@@ -67,8 +67,8 @@ describe('drawDiagramTrains', () => {
     const ctx = createRecordingContext();
     const e = env();
     drawDiagramTrains(ctx, e);
-    // Consecutive vertices at equal y are the dwell stubs; the 待避 at C is
-    // four minutes long, which at 0.2 px/s is 48 px wide.
+    // Consecutive vertices at equal y are the dwell stubs. The stub across
+    // the 待避 at C is what makes the wait legible on the diagram at all.
     const pts = [...ctx.ops('moveTo'), ...ctx.ops('lineTo')].map((c) => ({
       x: c.args[0] as number,
       y: c.args[1] as number,
@@ -83,7 +83,14 @@ describe('drawDiagramTrains', () => {
     const local = e.layout.trainById.get(TOY.localDown)!;
     const dwell = local.points.filter((p) => p.stationId === TOY.stationC);
     expect(dwell[0]!.y).toBe(dwell[1]!.y);
-    expect((dwell[1]!.x - dwell[0]!.x) * e.camera.scaleX).toBeCloseTo(48);
+    // Derived from the fixture rather than a hardcoded pixel count, so a
+    // retiming of the 待避 does not silently invalidate this.
+    const stop = toyProject()
+      .trains.byId[TOY.localDown]!.stops.find((s) => s.stationId === TOY.stationC)!;
+    const dwellSec = stop.dep! - stop.arr!;
+    expect((dwell[1]!.x - dwell[0]!.x) * e.camera.scaleX).toBeCloseTo(
+      dwellSec * e.camera.scaleX,
+    );
   });
 
   it('applies the type dash pattern', () => {

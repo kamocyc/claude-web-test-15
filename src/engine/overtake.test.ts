@@ -22,7 +22,7 @@ describe('detectOvertakes', () => {
       passingTrainId: TOY.expressDown,
       waitArr: 8 * H + 4 * M,
       passAt: 8 * H + 6 * M,
-      waitDep: 8 * H + 8 * M,
+      waitDep: 8 * H + 8 * M + 30,
       declared: true,
       legal: true,
     });
@@ -86,7 +86,7 @@ describe('detectConnections', () => {
       direction: 'down',
       fromTrainId: TOY.localDown,
       toTrainId: TOY.expressDown,
-      transferSec: 2 * M,
+      transferSec: 150,
       declared: false,
       viable: true,
     });
@@ -100,7 +100,7 @@ describe('detectConnections', () => {
 
   it('marks a transfer outside the window as not viable', () => {
     const doc = toyProjectCopy();
-    // Express through C only 30 s after the local arrives.
+    // Express calls at C only 30 s after the local arrives.
     const express = doc.trains.byId[TOY.expressDown]!;
     express.stops[2]!.arr = 8 * H + 4 * M + 30;
     express.stops[2]!.dep = 8 * H + 4 * M + 30;

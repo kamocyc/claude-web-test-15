@@ -130,12 +130,18 @@ describe('reduce', () => {
   it('train/recomputeTimes derives forward from the origin departure', () => {
     const doc = apply(toyProject(), { type: 'train/recomputeTimes', trainId: TOY.expressDown });
     const train = doc.trains.byId[TOY.expressDown] as Train;
-    // A dep 08:03, B and C are passes (base 70, no penalties), D is a stop.
+    // A dep 08:03, B is a pass, C and D are stops. Each leg is base 70 plus a
+    // start penalty when the previous stop was a stand and a stop penalty when
+    // this one is.
     expect(train.stops[0]?.dep).toBe(8 * 3600 + 3 * 60);
     expect(train.stops[0]?.arr).toBeUndefined();
     expect(train.stops[1]?.arr).toBe(8 * 3600 + 3 * 60 + 80); // 70 + start penalty
-    expect(train.stops[2]?.arr).toBe(8 * 3600 + 3 * 60 + 150);
-    expect(train.stops[3]?.arr).toBe(8 * 3600 + 3 * 60 + 230); // + stop penalty
+    expect(train.stops[2]?.arr).toBe(8 * 3600 + 3 * 60 + 160); // 70 + stop penalty
+    // The dwell at C is preserved rather than collapsed to the station's 20 s
+    // minimum: it is measured from the recomputed arrival to the departure the
+    // author wrote (08:06:30), which is 50 s.
+    expect(train.stops[2]?.dep).toBe(8 * 3600 + 3 * 60 + 210);
+    expect(train.stops[3]?.arr).toBe(8 * 3600 + 3 * 60 + 300); // 70 + both penalties
     expect(train.stops[3]?.dep).toBeUndefined();
   });
 
