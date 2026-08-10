@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [claude/railway-operation-simulator-a8gmwe]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
