@@ -12,7 +12,10 @@
  *   2. **方向別複々線.** In the 二子玉川〜溝の口 section the 青各停 belongs on
  *      the 田園都市線 (outer) pair — those are the only tracks with a platform
  *      at 二子新地 and 高津 — while 急行 and 緑各停 stay on the 大井町線 (inner)
- *      pair, which has no platform there at all.
+ *      pair, which has no platform there at all. At 溝の口 itself the pair is
+ *      not what decides the face: stock that turns round there is 大井町線 stock
+ *      and stands on 2・3番線, and stock that runs through is on the 田園都市線
+ *      beyond the station and uses 1・4番線.
  *   3. **Platform.** A passenger stop may not be booked on a 通過線.
  *   4. **折り返し.** A formation that arrives and works the next train out of
  *      the same station without shunting reverses *in place*: the arrival and
@@ -122,6 +125,16 @@ export interface TurnbackLink {
   arrivingTrainId: TrainId;
   departingTrainId: TrainId;
 }
+
+/** How much of a yard road is already spoken for; see `preferenceOrder`. */
+interface YardLoad {
+  /** Movements booked on it so far. */
+  count: number;
+  /** When the last of them clears. */
+  until: number;
+}
+
+const NO_LOAD = (): YardLoad => ({ count: 0, until: 0 });
 
 /** Stations where the inner/outer pair actually has to be chosen. */
 const QUAD_SECTION: readonly StationKey[] = ['futakoshinchi', 'takatsu', 'mizonokuchi'];
@@ -378,9 +391,11 @@ export class TrackBooking {
         // berth.
         if (opts.sidingOnly === true && role !== 'stabling') return false;
         if (!inQuad) return true;
-        // The 溝の口 引上線 lie beyond the 大井町線 faces; a 田園都市線 train
-        // cannot reach them without crossing the through roads.
-        return role === routing || (role === 'stabling' && routing === 'om');
+        // A 引上線 at 溝の口 hangs off the 大井町線 faces, and a formation being
+        // berthed there has finished its run: it is already on that side of the
+        // station, whichever pair of rails it came in on. What it may not do is
+        // stand on a 田園都市線 platform face.
+        return role === 'stabling' || role === routing;
       })
       .sort((a, b) => berthScore(this.facts, a) - berthScore(this.facts, b));
     for (const track of ranked) {
@@ -483,11 +498,19 @@ export class TrackBooking {
       if (!permitted(this.facts, stationId, forced, ev)) return undefined;
       return this.free(forced, ev, pending) ? forced : undefined;
     }
-    for (const track of preferenceOrder(this.facts, stationId, tracks, ev)) {
+    for (const track of preferenceOrder(this.facts, stationId, tracks, ev, this.yardLoad)) {
       if (this.free(track, ev, pending)) return track;
     }
     return undefined;
   }
+
+  /** How much a yard road has been asked for already — see `preferenceOrder`. */
+  private readonly yardLoad = (trackId: StationTrackId): YardLoad => {
+    const slots = this.occupancy.get(trackId) ?? [];
+    let until = Number.NEGATIVE_INFINITY;
+    for (const slot of slots) if (slot.to > until) until = slot.to;
+    return { count: slots.length, until };
+  };
 
   /**
    * Take back a chain end's reservation when a train has nowhere else to stand.
@@ -502,7 +525,7 @@ export class TrackBooking {
     const tracks = this.facts.tracksOf.get(stationId) ?? [];
     const candidates =
       ev.forcedTrackId === undefined
-        ? preferenceOrder(this.facts, stationId, tracks, ev)
+        ? preferenceOrder(this.facts, stationId, tracks, ev, this.yardLoad)
         : tracks.filter((t) => t.id === ev.forcedTrackId && permitted(this.facts, stationId, t, ev));
     for (const track of candidates) {
       const from = ev.occFrom - track.approachSec;
@@ -672,7 +695,25 @@ function permitted(
         !train.isPassenger &&
         ((train.preferStablingAtOrigin && isOrigin) ||
           (train.preferStablingAtTerminus === true && isTerminus));
-      if (!stablingOk && role !== train.routing) return false;
+      // At 溝の口 the face is chosen by what the train does NEXT, not by the
+      // pair of rails it arrived on — the throat has the crossovers, which is
+      // also how the 引上線 beyond the 大井町線 faces are reached at all.
+      //
+      //   - a train that starts or ends its run here is 大井町線 stock turning
+      //     round, so it uses the 大井町線 island (2・3番線) or a 引上線;
+      //   - a train that runs through is on the 田園都市線 beyond this station,
+      //     so it uses that line's own faces (1・4番線).
+      //
+      // Before this, the pair was carried straight through to the platform: a
+      // 各停(青) — which runs the outer pair through the quad section so that it
+      // can call at 二子新地 and 高津 — terminated on 1番線 and stood there for a
+      // quarter of an hour, 134 times a day. 1・4番線 belong to a line this
+      // document does not model, so they merely *looked* free; in fact one of
+      // that line's own trains is through them every couple of minutes.
+      const endsHere = isOrigin || isTerminus;
+      const needed: string =
+        stationKey === 'mizonokuchi' ? (endsHere ? 'om' : 'dt') : train.routing;
+      if (!stablingOk && role !== needed) return false;
     } else if (stationKey === 'futakotamagawa') {
       // 大井町線 trains use the 大井町線 faces even when they are about to
       // cross over: the crossover itself lies in the 二子玉川〜二子新地 link.
@@ -696,12 +737,31 @@ function preferenceOrder(
   stationId: StationId,
   tracks: readonly StationTrack[],
   ev: Event,
+  yardLoad: (trackId: StationTrackId) => YardLoad = NO_LOAD,
 ): StationTrack[] {
   const station = facts.stationById.get(stationId)!;
   const primary = ev.targets[0]!;
   const isOrigin = primary.stopIndex === 0;
   const isTerminus = primary.stopIndex === primary.train.stops.length - 1;
   const allowed = tracks.filter((track) => permitted(facts, stationId, track, ev));
+  const order = new Map(tracks.map((t, i) => [t.id, i]));
+
+  // A yard has no through road and no direction, so the station's "default"
+  // road means nothing there — and taking it anyway put every single 出庫 of
+  // the day on 留置10番線 and every 入庫 on 留置1番線, which is how nineteen
+  // formations ended up drawn on one road with `+18` beside them. A yard fills
+  // its emptiest road, which is also what a real 車庫 does.
+  if (station.kind === 'depot') {
+    return allowed.sort((a, b) => {
+      const la = yardLoad(a.id);
+      const lb = yardLoad(b.id);
+      return (
+        la.count - lb.count ||
+        la.until - lb.until ||
+        (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)
+      );
+    });
+  }
 
   const score = (track: StationTrack): number => {
     const role = facts.trackRole.get(track.id);
@@ -713,7 +773,6 @@ function preferenceOrder(
     return 2;
   };
 
-  const order = new Map(tracks.map((t, i) => [t.id, i]));
   return allowed.sort(
     (a, b) => score(a) - score(b) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
   );

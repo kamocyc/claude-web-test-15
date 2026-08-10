@@ -344,10 +344,13 @@ function drawYard(ctx: DrawContext, env: LineDrawEnv, yard: DepotLane): void {
     ctx.stroke();
   }
 
-  // Road names only once the road is long enough to hold one — a yard is a
-  // few hundred metres of a line tens of kilometres long, so at the fitted
-  // zoom the names appear as the reader zooms into the depot.
-  const room = Math.abs(ex - tx);
+  // Road names only once the road is long enough to hold one *and* the stock
+  // standing on it — a yard is a few hundred metres of a line tens of
+  // kilometres long, so at the fitted zoom a name would be drawn underneath
+  // the formation chip that shares its road. The reserve is one chip wide;
+  // below it the names drop and come back as the reader zooms into the depot,
+  // exactly as the station names in the band above do.
+  const room = Math.abs(ex - tx) - CHIP_RESERVE_PX;
   for (const road of yard.tracks) {
     if (measuredTextWidth(road.label, TRACK_FONT) + 8 > room) continue;
     const y = crisp(laneY(env, road.index));
@@ -729,6 +732,16 @@ function drawDepots(ctx: DrawContext, env: LineDynamicEnv): void {
 
 /** Roads → the formations standing on them. Reused across frames. */
 const stabledByLane = new Map<number, FormationId[]>();
+
+/**
+ * Room kept clear at the outer end of a yard road for the formation chips.
+ *
+ * The chips are laid out from that end inwards and the road name from the
+ * throat outwards, so without a reserve the two are drawn on top of each other
+ * on any road short enough to matter — which, at the fitted zoom, is all of
+ * them.
+ */
+const CHIP_RESERVE_PX = 46;
 
 /**
  * The stabled formations, drawn as chips on their own road.
