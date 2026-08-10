@@ -50,6 +50,31 @@ export interface TrainEvent {
   isOvertakeWait: boolean;
 }
 
+/** One road a formation stands on during a layover, from `from` onwards. */
+export interface LayoverBerth {
+  from: Sec;
+  trackId?: StationTrackId;
+}
+
+/**
+ * What the stock does between arriving as one train and leaving as the next.
+ *
+ * A train that terminates does not evaporate: its formation stands at the
+ * platform (or is shunted to a 引上線 and back) until the next train of the
+ * same duty departs. Without this the line view blanks the train out at the
+ * arrival and pops the successor into existence minutes later, which reads as
+ * a vehicle disappearing and another teleporting in.
+ */
+export interface LayoverPlan {
+  /** The successor's booked departure — the instant this train stops being drawn. */
+  untilSec: Sec;
+  stationId: StationId;
+  km: Meters;
+  /** Roads in time order. The first begins at this train's own arrival. */
+  berths: LayoverBerth[];
+  nextTrainId: TrainId;
+}
+
 export interface TrainTimeline {
   trainId: TrainId;
   train: Train;
@@ -66,6 +91,8 @@ export interface TrainTimeline {
   formationId?: FormationId;
   /** Total distance covered, metres. */
   distance: Meters;
+  /** Set when the duty runs straight on into another train from here. */
+  layover?: LayoverPlan;
 }
 
 export interface OccupancyInterval {
@@ -154,6 +181,13 @@ export type TrainPhase =
       phase: 'running';
       fromStationId: StationId;
       toStationId: StationId;
+      /**
+       * The roads the leg leaves from and arrives at. The line view needs them
+       * to swing the train out of its 番線 and back in along the drawn leads
+       * instead of jumping a lane at the departure instant.
+       */
+      fromTrackId?: StationTrackId;
+      toTrackId?: StationTrackId;
       km: Meters;
       progress: number;
       speedKmh: number;
@@ -168,8 +202,38 @@ export type TrainPhase =
       until: Sec;
       reason: DwellReason;
     }
-  /** 通過 */
-  | { phase: 'passing'; stationId: StationId; trackId?: StationTrackId; km: Meters }
+  /**
+   * 通過 — an annotation on a leg, not a stop.
+   *
+   * `km` is the train's true interpolated position: it does NOT snap to the
+   * station, because a marker that jumps forward onto the station, freezes and
+   * jumps again is exactly the artefact the trapezoidal profile exists to
+   * avoid. `fromStationId`/`toStationId` describe the leg being run so the
+   * view places it the same way it places a running train.
+   */
+  | {
+      phase: 'passing';
+      stationId: StationId;
+      trackId?: StationTrackId;
+      km: Meters;
+      fromStationId?: StationId;
+      toStationId?: StationId;
+      fromTrackId?: StationTrackId;
+      toTrackId?: StationTrackId;
+    }
+  /** 折返待機 — arrived, but the stock is still here forming the next train. */
+  | {
+      phase: 'layover';
+      stationId: StationId;
+      trackId?: StationTrackId;
+      km: Meters;
+      since: Sec;
+      until: Sec;
+      nextTrainId: TrainId;
+      /** Mid-shunt: the road being left, and how far across the move is. */
+      fromTrackId?: StationTrackId;
+      shunt?: number;
+    }
   /** 入庫済 / 運行終了 */
   | { phase: 'finished' };
 

@@ -17,6 +17,18 @@ describe('snapshotAt', () => {
     expect(ids).toEqual([TOY.localDown, TOY.expressDown].sort());
   });
 
+  it('keeps a terminated train in the bucket through its layover', () => {
+    // 各101 arrives D at 08:10:30 and its stock leaves as 回8002 at 08:20, so
+    // it has to still be in the snapshot at 08:15 or the line view has nothing
+    // to draw standing at the platform.
+    const snap = snapshotAt(idx, 8 * H + 15 * M);
+    const local = snap.trains.find((t) => t.trainId === TOY.localDown);
+    expect(local?.phase.phase).toBe('layover');
+    // …and the successor is not in the snapshot yet, so exactly one marker
+    // stands at D — the stock, not two trains and not none.
+    expect(snap.trains.map((t) => t.trainId)).toEqual([TOY.localDown]);
+  });
+
   it('is empty before anything moves', () => {
     expect(snapshotAt(idx, 4 * H).trains).toEqual([]);
   });
@@ -52,6 +64,27 @@ describe('snapshotAt', () => {
   it('calls the 出庫 leg a deadhead out of the shed', () => {
     const snap = snapshotAt(idx, 7 * H + 51 * M);
     expect(snap.formations.get(TOY.formation1)?.phase).toBe('deadheadOut');
+  });
+
+  it('says which yard road a stabled formation is standing on', () => {
+    // Before the duty starts, the road its 出庫回送 leaves from…
+    const before = snapshotAt(idx, 7 * H);
+    expect(before.formations.get(TOY.formation1)?.stationId).toBe(TOY.stationDepot);
+    expect(before.formations.get(TOY.formation1)?.trackId).toBe(TOY.x1);
+
+    // …and afterwards, the road its 入庫回送 arrived at. Without this the
+    // formation would come out of nowhere and vanish into a caption.
+    const after = snapshotAt(idx, 9 * H);
+    expect(after.formations.get(TOY.formation1)?.trackId).toBe(TOY.x1);
+  });
+
+  it('does not invent a road for a formation stabled away from a depot', () => {
+    const stabled = snapshotAt(idx, 8 * H + 15 * M);
+    const f1 = stabled.formations.get(TOY.formation1)!;
+    // D駅 is not a depot, so the stable leg's own road is what is reported.
+    expect(f1.stationId).toBe(TOY.stationD);
+    expect(f1.trackId).toBe(TOY.d1);
+    expect(f1.depotId).toBeUndefined();
   });
 
   it('reuses the pooled snapshot object', () => {

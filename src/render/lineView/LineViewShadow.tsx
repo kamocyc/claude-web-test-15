@@ -51,6 +51,16 @@ function phaseDetails(train: TrainRuntime): {
     if (phase.trackId !== undefined) out.trackId = phase.trackId;
     return out;
   }
+  if (phase.phase === 'layover') {
+    // Reported as a turnback: the arriving train is gone, and what is standing
+    // at the platform is the stock of the one that leaves next.
+    const out: { stationId?: string; trackId?: StationTrackId; reason?: string } = {
+      stationId: phase.stationId,
+      reason: 'turnback',
+    };
+    if (phase.trackId !== undefined) out.trackId = phase.trackId;
+    return out;
+  }
   if (phase.phase === 'passing') {
     const out: { stationId?: string; trackId?: StationTrackId } = { stationId: phase.stationId };
     if (phase.trackId !== undefined) out.trackId = phase.trackId;

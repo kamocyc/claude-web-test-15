@@ -3,9 +3,11 @@
  *
  * Three stacked canvases (see `useCanvasLayers`) plus a hidden DOM shadow:
  *
- *   static  — rails, station blocks, platforms, 待避線 tint, depot stubs.
- *             Redrawn on camera or document change only.
- *   dynamic — train markers. Redrawn each frame while the clock runs.
+ *   static  — rails, station blocks, platforms and their turnout leads, 待避線
+ *             tint, and every yard road. Redrawn on camera or document change
+ *             only.
+ *   dynamic — train markers, yard name plates and the formations stabled in
+ *             them. Redrawn each frame while the clock runs.
  *   overlay — hover and selection. Redrawn on pointer events.
  *
  * The component reads application state imperatively through
@@ -53,18 +55,37 @@ import { LineViewShadow } from './LineViewShadow';
  *
  * The floor is the height of a marker (26 px) plus air. Below that the boxes
  * would touch and the view stops meaning anything, so it is better to run out
- * of lanes and let the user scroll than to render a smear.
+ * of lanes and let the user scroll than to render a smear. The ceiling is
+ * generous enough that a yard — whose roads sit at a fraction of the main lane
+ * pitch — can be zoomed into until its roads are as readable as a platform.
  */
 const LIMITS: ScaleLimits = {
   minScaleX: 0.004,
   maxScaleX: 4,
   minScaleY: 30,
-  maxScaleY: 54,
+  maxScaleY: 96,
 };
 
 /** Breathing room around the fitted line, CSS pixels. */
 const FIT_PAD_X = 40;
 const FIT_PAD_Y = 6;
+/**
+ * Lane pitch below which showing the yards on open costs more than it buys.
+ *
+ * On a tall enough canvas everything fits at a comfortable pitch and there is
+ * no reason to hide the yards; on a short one, squeezing a dozen stabling
+ * roads in would shrink the running line — the thing the view is *for* — to
+ * the legibility floor. So the opening shot takes whichever is better and the
+ * rest is a scroll away either way.
+ */
+const COMFORTABLE_LANE_PX = 40;
+
+/** The rectangle the camera should frame on open, given the room available. */
+function boundsToFit(layout: LineLayout, viewport: Viewport): WorldBounds {
+  const usableH = Math.max(viewport.height - FIT_PAD_Y * 2, 1);
+  const fullSpan = Math.max(layout.bounds.maxY - layout.bounds.minY, Number.EPSILON);
+  return usableH / fullSpan >= COMFORTABLE_LANE_PX ? layout.bounds : layout.fitBounds;
+}
 
 const EMPTY_BOUNDS: WorldBounds = { minX: 0, maxX: 1000, minY: 0, maxY: 2 };
 
@@ -126,9 +147,11 @@ export function LineViewCanvas(props: LineViewProps) {
       if (!fitted.current) {
         // Both axes are fitted, with different padding and different limits:
         // x is a free zoom over metres, y is a lane pitch that has to stay in
-        // a band a marker can be read at. `bounds` already includes the
-        // station-name band and the bottom gutter, so fitting y fills the
-        // canvas instead of leaving the lanes huddled at the top.
+        // a band a marker can be read at. `fitBounds` already includes the
+        // station-name band, so fitting y fills the canvas instead of leaving
+        // the lanes huddled at the top — and it deliberately stops short of
+        // the yards, which are reached by panning against the full `bounds`.
+        const framed = boundsToFit(currentLayout, viewportRef.current);
         const fitX = fitXToBounds(
           cameraRef.current,
           currentLayout.bounds,
@@ -137,7 +160,7 @@ export function LineViewCanvas(props: LineViewProps) {
           LIMITS,
         );
         cameraRef.current = clampCamera(
-          fitYToBounds(fitX, currentLayout.bounds, viewportRef.current, FIT_PAD_Y, LIMITS),
+          fitYToBounds(fitX, framed, viewportRef.current, FIT_PAD_Y, LIMITS),
           currentLayout.bounds,
           viewportRef.current,
           24,

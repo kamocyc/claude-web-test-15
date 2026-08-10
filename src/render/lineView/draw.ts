@@ -8,14 +8,14 @@
  * `useCanvasLayers`, which is what keeps text, marker sizes and stroke widths
  * constant as the line zooms.
  *
- * The two module-level scratch objects below are the one exception to "no
+ * The module-level scratch objects below are the one exception to "no
  * globals". They are reusable solver buffers, fully reset at the top of the
  * draw that uses them, so a draw's output still depends only on its arguments
  * — they exist because the alternative is allocating a few hundred bytes of
  * garbage sixty times a second.
  */
 
-import type { TrainId, TrainTypeId } from '@/domain/ids';
+import type { FormationId, TrainId, TrainTypeId } from '@/domain/ids';
 import type { Formation, TrainType } from '@/domain/model';
 import type { SimSnapshot, TrainRuntime } from '@/engine/types';
 import type { Camera2D, Viewport } from '../canvas/camera';
@@ -27,13 +27,15 @@ import { drawLabel, measuredTextWidth } from '../canvas/textCache';
 import type { RenderTheme } from '../canvas/theme';
 import { contrastText, desaturate, withAlpha } from '../canvas/theme';
 import {
-  depotBoxLayout,
+  depotPlateLayout,
+  DEPOT_PLATE_PAD,
   DROPPED,
   LABEL_ROW_PITCH,
   laneCenterY,
   MarkerSlots,
   placeTrainInto,
   StationLabelPlacer,
+  type DepotLane,
   type LineLayout,
   type PlaceTrainArgs,
   type TrainPlacement,
@@ -67,7 +69,7 @@ const labelPlacer = new StationLabelPlacer();
 const markerSlots = new MarkerSlots();
 const placeArgs: PlaceTrainArgs = { km: 0, direction: 'down' };
 const placement: TrainPlacement = { x: 0, lane: 0 };
-const NO_FORMATIONS: readonly string[] = [];
+const NO_FORMATIONS: readonly FormationId[] = [];
 
 export interface LineDrawEnv {
   layout: LineLayout;
@@ -112,8 +114,8 @@ function visible(x0: number, x1: number, viewport: Viewport, slop = 60): boolean
 // ---------------------------------------------------------------------------
 
 /**
- * Rails, station blocks, platforms, 待避線 tinting, the depot stubs and the
- * station name band.
+ * Rails, station blocks, platforms and their turnout leads, 待避線 tinting,
+ * the yards, and the station name band.
  *
  * Redrawn only when the camera or the document changes — never on a clock
  * tick. Nothing here depends on `t`.
@@ -142,30 +144,10 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
     drawDirectionTicks(ctx, sx0, sx1, y, lane.direction, theme);
   }
 
-  // -- depot stubs ----------------------------------------------------------
-  // Only the track. The box itself is on the dynamic layer, because its size
-  // depends on how many formations are stabled.
-  for (const depot of layout.depots) {
-    const sx0 = worldToScreenX(camera, depot.x0);
-    const sx1 = worldToScreenX(camera, depot.x1);
-    if (!visible(sx0, sx1, viewport)) continue;
-    const y = crisp(laneY(env, depot.index));
-    const jx = worldToScreenX(camera, depot.junctionX);
-    const jy = crisp(laneY(env, depot.junctionLane));
-    const outward = depot.x0 < depot.junctionX ? -1 : 1;
-
-    // The stub angles off the main axis — that diagonal is what reads as
-    // "this train is leaving the line and going into the depot".
-    ctx.strokeStyle = theme.railDim;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.beginPath();
-    ctx.moveTo(jx, jy);
-    ctx.lineTo(jx + outward * 20, y);
-    ctx.lineTo(outward < 0 ? sx0 : sx1, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
+  // -- yards ----------------------------------------------------------------
+  // Every road of every depot, fanned out of a throat off the main line. The
+  // name plate is on the dynamic layer, because it carries the live count.
+  for (const yard of layout.depots) drawYard(ctx, env, yard);
 
   // -- station blocks -------------------------------------------------------
   // Names hang off the top of the lane stack. How many rows they get depends
@@ -202,6 +184,8 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
 
     for (const lane of station.trackLanes) {
       const y = crisp(laneY(env, lane.index));
+      const bx0 = worldToScreenX(camera, lane.bodyX0);
+      const bx1 = worldToScreenX(camera, lane.bodyX1);
 
       // 待避線 gets its own tint: spotting the passing loop must not require
       // reading the track name.
@@ -210,9 +194,26 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
         ctx.fillRect(sx0, y - camera.scaleY / 2 + 1, sx1 - sx0, camera.scaleY - 2);
       }
 
-      if (lane.hasPlatform) {
+      if (lane.hasPlatform && bx1 - bx0 > 6) {
         ctx.fillStyle = withAlpha(theme.platform, 0.35);
-        ctx.fillRect(sx0 + 2, y - 9, sx1 - sx0 - 4, 4);
+        ctx.fillRect(bx0 + 2, y - 9, bx1 - bx0 - 4, 4);
+      }
+
+      // The leads into the running lanes this road serves. Without them a
+      // 待避線 is a segment floating beside the railway with no way on or off,
+      // and the train that swings into it has nothing to swing along.
+      if (lane.leadLanes.length > 0) {
+        ctx.strokeStyle = theme.railDim;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (const running of lane.leadLanes) {
+          const ry = crisp(laneY(env, running));
+          ctx.moveTo(sx0, ry);
+          ctx.lineTo(bx0, y);
+          ctx.moveTo(bx1, y);
+          ctx.lineTo(sx1, ry);
+        }
+        ctx.stroke();
       }
 
       ctx.strokeStyle = lane.canBeOvertaken
@@ -222,12 +223,12 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
           : theme.railDim;
       ctx.lineWidth = lane.hasPlatform ? 4 : 2;
       ctx.beginPath();
-      ctx.moveTo(sx0, y);
-      ctx.lineTo(sx1, y);
+      ctx.moveTo(bx0, y);
+      ctx.lineTo(bx1, y);
       ctx.stroke();
 
-      if (sx1 - sx0 > 40) {
-        drawLabel(ctx, lane.label, sx0 + 3, y + 9, TRACK_FONT, theme.textFaint, {
+      if (bx1 - bx0 > 40) {
+        drawLabel(ctx, lane.label, bx0 + 3, y + 9, TRACK_FONT, theme.textFaint, {
           themeKey: theme.key,
         });
       }
@@ -267,6 +268,63 @@ function planStationLabels(env: LineDrawEnv, rows: number): void {
   labelPlacer.solve();
 }
 
+/**
+ * One yard: the throat off both running lines, the ladder, and every road.
+ *
+ * The roads are the point. A depot used to be a single lane with a box on it,
+ * which meant the ten stabling roads at 鷺沼車庫 — and which formation was on
+ * which — were simply not in the picture, and a 回送 disappeared into a caption
+ * the moment it arrived.
+ */
+function drawYard(ctx: DrawContext, env: LineDrawEnv, yard: DepotLane): void {
+  const { layout, camera, theme, viewport } = env;
+  const sx0 = worldToScreenX(camera, yard.x0);
+  const sx1 = worldToScreenX(camera, yard.x1);
+  if (!visible(sx0, sx1, viewport)) return;
+
+  const jx = worldToScreenX(camera, yard.junctionX);
+  const rx = worldToScreenX(camera, yard.rootX);
+  const tx = worldToScreenX(camera, yard.throatX);
+  const ex = worldToScreenX(camera, yard.endX);
+  const ry = crisp(laneY(env, yard.rootLane));
+
+  // Both running lines lead into the yard: 出庫 and 入庫 happen in both
+  // directions, and the dashes say "this is not running line".
+  ctx.strokeStyle = theme.railDim;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(jx, crisp(laneY(env, layout.laneDown)));
+  ctx.lineTo(rx, ry);
+  ctx.moveTo(jx, crisp(laneY(env, layout.laneUp)));
+  ctx.lineTo(rx, ry);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.lineWidth = 1.5;
+  for (const road of yard.tracks) {
+    const y = crisp(laneY(env, road.index));
+    ctx.beginPath();
+    ctx.moveTo(rx, ry);
+    ctx.lineTo(tx, y);
+    ctx.lineTo(ex, y);
+    ctx.stroke();
+  }
+
+  // Road names only once the road is long enough to hold one — a yard is a
+  // few hundred metres of a line tens of kilometres long, so at the fitted
+  // zoom the names appear as the reader zooms into the depot.
+  const room = Math.abs(ex - tx);
+  for (const road of yard.tracks) {
+    if (measuredTextWidth(road.label, TRACK_FONT) + 8 > room) continue;
+    const y = crisp(laneY(env, road.index));
+    drawLabel(ctx, road.label, Math.min(tx, ex) + 4, y - 2, TRACK_FONT, theme.textFaint, {
+      baseline: 'bottom',
+      themeKey: theme.key,
+    });
+  }
+}
+
 /** Small chevrons along a running lane, so the direction is never ambiguous. */
 function drawDirectionTicks(
   ctx: DrawContext,
@@ -292,7 +350,13 @@ function drawDirectionTicks(
 // Dynamic layer
 // ---------------------------------------------------------------------------
 
-/** Should this train be drawn at all, at this instant, with these filters? */
+/**
+ * Should this train be drawn at all, at this instant, with these filters?
+ *
+ * `layover` counts: the train has arrived but its stock is standing at the
+ * platform waiting to form the next one, and dropping the marker for those
+ * minutes is what used to make a formation vanish at every 折り返し.
+ */
 function isDrawn(train: TrainRuntime, showDeadhead: boolean): boolean {
   if (train.phase.phase === 'pending' || train.phase.phase === 'finished') return false;
   return showDeadhead || train.category === 'service';
@@ -355,14 +419,39 @@ function placementInto(
   placeArgs.trackId = undefined;
   placeArgs.fromStationId = undefined;
   placeArgs.toStationId = undefined;
-  if (phase.phase === 'dwelling' || phase.phase === 'passing') {
+  placeArgs.fromTrackId = undefined;
+  placeArgs.toTrackId = undefined;
+  placeArgs.trackBlend = undefined;
+
+  if (phase.phase === 'dwelling') {
     placeArgs.stationId = phase.stationId;
     placeArgs.trackId = phase.trackId;
     placeArgs.km = phase.km;
+  } else if (phase.phase === 'layover') {
+    placeArgs.stationId = phase.stationId;
+    placeArgs.trackId = phase.trackId;
+    placeArgs.km = phase.km;
+    placeArgs.fromTrackId = phase.fromTrackId;
+    placeArgs.trackBlend = phase.shunt;
   } else if (phase.phase === 'running') {
     placeArgs.fromStationId = phase.fromStationId;
     placeArgs.toStationId = phase.toStationId;
+    placeArgs.fromTrackId = phase.fromTrackId;
+    placeArgs.toTrackId = phase.toTrackId;
     placeArgs.km = phase.km;
+  } else if (phase.phase === 'passing') {
+    placeArgs.km = phase.km;
+    // 通過 is an annotation on a leg, so it is placed as a leg — falling back
+    // to the station itself only for a pass with no leg after it.
+    if (phase.fromStationId !== undefined && phase.toStationId !== undefined) {
+      placeArgs.fromStationId = phase.fromStationId;
+      placeArgs.toStationId = phase.toStationId;
+      placeArgs.fromTrackId = phase.fromTrackId;
+      placeArgs.toTrackId = phase.toTrackId;
+    } else {
+      placeArgs.stationId = phase.stationId;
+      placeArgs.trackId = phase.trackId;
+    }
   }
   return placeTrainInto(layout, placeArgs, out);
 }
@@ -393,6 +482,9 @@ function drawTrainMarker(
 
   const phase = train.phase;
   const waiting = phase.phase === 'dwelling' && phase.reason === 'overtakeWait';
+  // 折返 is the other state worth calling out: this train has arrived, and
+  // what the reader is looking at is its stock waiting to become the next one.
+  const badge = waiting ? '待避' : phase.phase === 'layover' ? '折返' : undefined;
 
   // The box has slid along the lane to avoid its neighbours, so say where the
   // train actually is: a tick at the true km plus a leader back to the box.
@@ -471,47 +563,66 @@ function drawTrainMarker(
     });
   }
 
-  if (waiting && !dimmed) {
-    drawWaitBadge(ctx, theme, x - 4, y - 4);
+  if (badge !== undefined && !dimmed) {
+    drawStateBadge(ctx, theme, x - 4, y - 4, badge, waiting);
   }
 }
 
-/** The 待避 badge. Making 緩急接続 obvious is the entire point of this view. */
-function drawWaitBadge(ctx: DrawContext, theme: RenderTheme, x: number, y: number): void {
+/**
+ * The 待避 / 折返 badge. Making 緩急接続 obvious is the entire point of this
+ * view; making it obvious that a marker is stock rather than a running train
+ * is what stops the layover from reading as a train that forgot to leave.
+ */
+function drawStateBadge(
+  ctx: DrawContext,
+  theme: RenderTheme,
+  x: number,
+  y: number,
+  text: string,
+  urgent: boolean,
+): void {
   const w = 26;
   const h = 12;
-  ctx.fillStyle = theme.waitRing;
+  ctx.fillStyle = urgent ? theme.waitRing : theme.borderStrong;
+  ctx.setLineDash([]);
   roundRectPath(ctx, x, y - h - 1, w, h, 3);
   ctx.fill();
-  drawLabel(ctx, '待避', x + w / 2, y - h / 2 - 1, '9px system-ui, sans-serif', '#1f1300', {
-    align: 'center',
-    baseline: 'middle',
-    themeKey: theme.key,
-  });
+  drawLabel(
+    ctx,
+    text,
+    x + w / 2,
+    y - h / 2 - 1,
+    '9px system-ui, sans-serif',
+    urgent ? '#1f1300' : contrastText(theme.borderStrong),
+    { align: 'center', baseline: 'middle', themeKey: theme.key },
+  );
 }
 
 /**
- * The depot boxes: name, how many formations are stabled, and — only once the
- * box is wide enough to hold them — which ones.
+ * Each yard's name plate and the formations standing in it, on the roads they
+ * are actually berthed on.
  *
- * A depot is drawn whether or not anything is in it. "鷺沼車庫 留置 0本" is a
- * fact worth showing; a box that vanishes when the last train leaves just
+ * A depot is drawn whether or not anything is in it. "鷺沼車庫 留置なし" is a
+ * fact worth showing; a yard that vanishes when the last train leaves just
  * looks like a rendering bug.
  */
 function drawDepots(ctx: DrawContext, env: LineDynamicEnv): void {
   const { layout, camera, theme, snapshot, viewport } = env;
-  for (const depot of layout.depots) {
-    const sx0 = worldToScreenX(camera, depot.x0);
-    const sx1 = worldToScreenX(camera, depot.x1);
+  for (const yard of layout.depots) {
+    const sx0 = worldToScreenX(camera, yard.x0);
+    const sx1 = worldToScreenX(camera, yard.x1);
     if (!visible(sx0, sx1, viewport, 140)) continue;
 
-    const junctionX = worldToScreenX(camera, depot.junctionX);
-    const outward = depot.x0 < depot.junctionX ? -1 : 1;
-    const box = depotBoxLayout({
-      junctionX,
-      stubEndX: outward < 0 ? sx0 : sx1,
-      centerY: laneY(env, depot.index),
-      laneHeight: camera.scaleY,
+    const ids = snapshot.depotOccupancy.get(yard.depotId) ?? NO_FORMATIONS;
+    const count = ids.length === 0 ? '留置なし' : `留置 ${ids.length}本`;
+    const nameW = measuredTextWidth(yard.label, DEPOT_FONT);
+    const countW = measuredTextWidth(count, SUB_FONT);
+    const endX = worldToScreenX(camera, yard.endX);
+    const plate = depotPlateLayout({
+      junctionX: worldToScreenX(camera, yard.junctionX),
+      stubEndX: endX,
+      centerY: laneY(env, yard.laneFrom) - camera.scaleY / 2 - 2,
+      contentWidth: nameW + 8 + countW,
       viewportWidth: viewport.width,
     });
 
@@ -519,75 +630,97 @@ function drawDepots(ctx: DrawContext, env: LineDynamicEnv): void {
     ctx.strokeStyle = theme.borderStrong;
     ctx.lineWidth = 1;
     ctx.setLineDash([]);
-    roundRectPath(ctx, box.x, box.y, box.w, box.h, 4);
+    roundRectPath(ctx, plate.x, plate.y, plate.w, plate.h, 3);
     ctx.fill();
     ctx.stroke();
 
-    const ids = snapshot.depotOccupancy.get(depot.depotId) ?? NO_FORMATIONS;
-    const nameY = box.y + 3;
-    const detailY = nameY + 12;
-    drawLabel(ctx, depot.label, box.x + 6, nameY, DEPOT_FONT, theme.text, {
-      baseline: 'top',
-      themeKey: theme.key,
-    });
-
-    if (ids.length === 0) {
-      drawLabel(ctx, '留置なし', box.x + 6, detailY, SUB_FONT, theme.textFaint, {
-        baseline: 'top',
-        themeKey: theme.key,
-      });
-      continue;
-    }
-    if (!box.showCodes) {
-      // Too narrow for the codes, so spend the whole line on the count.
-      drawLabel(ctx, `留置 ${ids.length}本`, box.x + 6, detailY, SUB_FONT, theme.textDim, {
-        baseline: 'top',
-        themeKey: theme.key,
-      });
-      continue;
-    }
-    drawLabel(ctx, `${ids.length}本`, box.x + box.w - 6, nameY, SUB_FONT, theme.accent, {
-      align: 'right',
-      baseline: 'top',
+    const textY = plate.y + plate.h / 2;
+    drawLabel(ctx, yard.label, plate.x + DEPOT_PLATE_PAD, textY, DEPOT_FONT, theme.text, {
+      baseline: 'middle',
       themeKey: theme.key,
     });
     drawLabel(
       ctx,
-      fitCodes(ids, env.formations, box.w - 12),
-      box.x + 6,
-      detailY,
+      count,
+      plate.x + plate.w - DEPOT_PLATE_PAD,
+      textY,
       SUB_FONT,
-      theme.textDim,
-      { baseline: 'top', themeKey: theme.key },
+      ids.length === 0 ? theme.textFaint : theme.accent,
+      { align: 'right', baseline: 'middle', themeKey: theme.key },
     );
+
+    drawStabled(ctx, env, yard, ids);
   }
 }
 
+/** Roads → the formations standing on them. Reused across frames. */
+const stabledByLane = new Map<number, FormationId[]>();
+
 /**
- * As many formation codes as fit in `widthPx`, with `+N` for the remainder.
+ * The stabled formations, drawn as chips on their own road.
  *
- * Builds at most one string per depot per frame, which is the price of showing
- * live occupancy at all; the widths themselves come from the memoized
- * measurement cache.
+ * Which road matters: "6121F is on 留置3番線" is the difference between a
+ * depot that is modelled and a depot that is a number in a caption. Stock the
+ * plan does not berth anywhere in particular goes on the yard lead, which is
+ * the honest place for "in there, somewhere".
  */
-function fitCodes(
-  ids: readonly string[],
-  formations: Map<string, Formation>,
-  widthPx: number,
-): string {
-  let text = '';
-  let shown = 0;
+function drawStabled(
+  ctx: DrawContext,
+  env: LineDynamicEnv,
+  yard: DepotLane,
+  ids: readonly FormationId[],
+): void {
+  const { layout, camera, theme, snapshot } = env;
+  if (ids.length === 0) return;
+
+  const outerX = worldToScreenX(camera, yard.endX);
+  const innerX = worldToScreenX(camera, yard.throatX);
+  const room = Math.abs(innerX - outerX);
+  if (room < 24) return; // the plate's count is all that fits
+
+  stabledByLane.clear();
   for (const id of ids) {
-    const code = formations.get(id)?.code ?? id;
-    const next = shown === 0 ? code : `${text} ${code}`;
-    const remaining = ids.length - shown - 1;
-    const suffix = remaining > 0 ? ` +${remaining}` : '';
-    if (measuredTextWidth(next + suffix, SUB_FONT) > widthPx) break;
-    text = next;
-    shown++;
+    const trackId = snapshot.formations.get(id)?.trackId;
+    const lane = trackId === undefined ? undefined : layout.laneOfTrack.get(trackId);
+    const key = lane === undefined ? yard.leadLane : lane;
+    const list = stabledByLane.get(key);
+    if (list) list.push(id);
+    else stabledByLane.set(key, [id]);
   }
-  if (shown === 0) return `+${ids.length}`;
-  return shown === ids.length ? text : `${text} +${ids.length - shown}`;
+
+  const dir = innerX < outerX ? -1 : 1;
+  const h = Math.max(8, Math.min(14, camera.scaleY * yard.lanePitch - 3));
+  for (const [lane, list] of stabledByLane) {
+    const cy = laneY(env, lane);
+    let cursor = outerX + dir * 3;
+    for (let i = 0; i < list.length; i++) {
+      const code = env.formations.get(list[i]!)?.code ?? list[i]!;
+      const remaining = list.length - i;
+      const w = measuredTextWidth(code, SUB_FONT) + 8;
+      if (Math.abs(cursor + dir * w - outerX) > room) {
+        drawLabel(ctx, `+${remaining}`, cursor, cy, SUB_FONT, theme.textFaint, {
+          align: dir < 0 ? 'right' : 'left',
+          baseline: 'middle',
+          themeKey: theme.key,
+        });
+        break;
+      }
+      const x = dir < 0 ? cursor - w : cursor;
+      ctx.fillStyle = theme.depot;
+      ctx.strokeStyle = theme.borderStrong;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      roundRectPath(ctx, x, cy - h / 2, w, h, 3);
+      ctx.fill();
+      ctx.stroke();
+      drawLabel(ctx, code, x + w / 2, cy, SUB_FONT, theme.textDim, {
+        align: 'center',
+        baseline: 'middle',
+        themeKey: theme.key,
+      });
+      cursor += dir * (w + 3);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

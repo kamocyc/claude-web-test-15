@@ -4,7 +4,8 @@
  * loop must not allocate.
  */
 
-import type { DepotId, FormationId } from '@/domain/ids';
+import type { DepotId, FormationId, StationId, StationTrackId } from '@/domain/ids';
+import type { DutyLeg, ProjectDocument } from '@/domain/model';
 import { depotByStationId, dutyLegSpan, dutySpan } from '@/domain/project';
 import { entityList, type Sec } from '@/domain/units';
 import { trainRuntimeAt } from './position';
@@ -17,6 +18,29 @@ import {
   type TimetableIndex,
   type TrainRuntime,
 } from './types';
+
+/** Where a duty leg begins or ends, road included when the plan names one. */
+function legEnd(
+  doc: ProjectDocument,
+  leg: DutyLeg,
+  which: 'first' | 'last',
+): { stationId: StationId; trackId?: StationTrackId } | undefined {
+  if (leg.kind === 'train') {
+    const train = doc.trains.byId[leg.trainId];
+    const stop = which === 'first' ? train?.stops[0] : train?.stops[train.stops.length - 1];
+    if (stop === undefined) return undefined;
+    return stop.trackId === undefined
+      ? { stationId: stop.stationId }
+      : { stationId: stop.stationId, trackId: stop.trackId };
+  }
+  if (leg.kind === 'stable') {
+    return leg.trackId === undefined
+      ? { stationId: leg.stationId }
+      : { stationId: leg.stationId, trackId: leg.trackId };
+  }
+  const depot = doc.depots.byId[leg.depotId];
+  return depot === undefined ? undefined : { stationId: depot.stationId };
+}
 
 export function createEmptySnapshot(): SimSnapshot {
   return {
@@ -104,9 +128,30 @@ export function snapshotInto(
     let phase: FormationPhase = 'inDepot';
     let kmToday = 0;
     let kmSoFar = 0;
+    // Where the stock was last seen, and where it is next seen. A formation
+    // sitting in the yard is not on "the depot" in general — it is on one road
+    // of it, the one its 入庫回送 arrived at or its 出庫回送 will leave from —
+    // and that is what the line view draws it on.
+    let restStationId: StationId | undefined;
+    let restTrackId: StationTrackId | undefined;
+    let nextStationId: StationId | undefined;
+    let nextTrackId: StationTrackId | undefined;
 
     for (const leg of duty.legs) {
       const span = dutyLegSpan(doc, leg);
+      if (span !== undefined && span.to <= t) {
+        const ends = legEnd(doc, leg, 'last');
+        if (ends !== undefined) {
+          restStationId = ends.stationId;
+          restTrackId = ends.trackId;
+        }
+      } else if (span !== undefined && span.from > t && nextStationId === undefined) {
+        const starts = legEnd(doc, leg, 'first');
+        if (starts !== undefined) {
+          nextStationId = starts.stationId;
+          nextTrackId = starts.trackId;
+        }
+      }
       if (leg.kind === 'train') {
         const tl = idx.timelines.get(leg.trainId);
         const distance = tl?.distance ?? 0;
@@ -150,6 +195,19 @@ export function snapshotInto(
 
     const span = dutySpan(doc, duty);
     if (span && (t < span.from || t > span.to)) phase = 'inDepot';
+
+    if (phase === 'inDepot' && runtime.stationId === undefined) {
+      const berth =
+        restStationId !== undefined && depotOfStation.has(restStationId)
+          ? { stationId: restStationId, trackId: restTrackId }
+          : nextStationId !== undefined && depotOfStation.has(nextStationId)
+            ? { stationId: nextStationId, trackId: nextTrackId }
+            : undefined;
+      if (berth !== undefined) {
+        runtime.stationId = berth.stationId;
+        if (berth.trackId !== undefined) runtime.trackId = berth.trackId;
+      }
+    }
 
     runtime.phase = phase;
     runtime.kmToday = kmToday;

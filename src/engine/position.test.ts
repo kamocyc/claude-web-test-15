@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PerfProfile } from '@/domain/model';
 import { asId } from '@/domain/ids';
+import { kmToMeters } from '@/domain/units';
 import { TOY, toyProject } from '@/testing/toyProject';
 import { buildIndex } from './buildIndex';
 import { interpolateKm, segmentSpeedKmh, trainRuntimeAt } from './position';
@@ -123,10 +124,74 @@ describe('trainRuntimeAt', () => {
     expect(rt.destinationStationId).toBe(TOY.stationD);
   });
 
-  it('is finished after the terminus arrival', () => {
+  it('is finished once the stock has left as the next train', () => {
+    // 各101 berths at D 08:10:30 and 回8002 takes the same stock out at 08:20.
     expect(trainRuntimeAt(local, 8 * H + 10 * M + 31, NO_DELAY, doc).phase.phase).toBe(
-      'finished',
+      'layover',
     );
+    expect(trainRuntimeAt(local, 8 * H + 20 * M - 1, NO_DELAY, doc).phase.phase).toBe('layover');
+    expect(trainRuntimeAt(local, 8 * H + 20 * M, NO_DELAY, doc).phase.phase).toBe('finished');
+  });
+
+  it('holds the terminated train on its arrival road until the successor leaves', () => {
+    const rt = trainRuntimeAt(local, 8 * H + 15 * M, NO_DELAY, doc);
+    if (rt.phase.phase !== 'layover') throw new Error('unreachable');
+    expect(rt.phase.stationId).toBe(TOY.stationD);
+    expect(rt.phase.trackId).toBe(TOY.d1);
+    expect(rt.phase.since).toBe(8 * H + 10 * M + 30);
+    expect(rt.phase.until).toBe(8 * H + 20 * M);
+    expect(rt.phase.nextTrainId).toBe(TOY.depotIn);
+    expect(rt.km).toBe(kmToMeters(3));
+    // Standing still, so nothing to interpolate across.
+    expect(rt.phase.shunt).toBeUndefined();
+  });
+
+  it('leaves the last train of a duty finished — there is nothing to form', () => {
+    const depotIn = idx.timelines.get(TOY.depotIn)!;
+    expect(depotIn.layover).toBeUndefined();
+    expect(trainRuntimeAt(depotIn, 8 * H + 31 * M, NO_DELAY, doc).phase.phase).toBe('finished');
+  });
+
+  it('hands over with no gap and no overlap', () => {
+    // Exactly one of the two trains is drawn at every instant across the turn.
+    const drawn = (t: number): string[] =>
+      [TOY.localDown, TOY.depotIn]
+        .map((id) => trainRuntimeAt(idx.timelines.get(id)!, t, NO_DELAY, doc))
+        .filter((rt) => rt.phase.phase !== 'pending' && rt.phase.phase !== 'finished')
+        .map((rt) => rt.number);
+    for (let t = 8 * H + 10 * M; t <= 8 * H + 21 * M; t += 5) {
+      expect(drawn(t), `at ${t}`).toHaveLength(1);
+    }
+  });
+
+  it('walks the stock across when the duty shunts it to another road', () => {
+    // Rewrite the D layover so the formation is berthed on 2番線 in between.
+    const shunted = toyProject();
+    const duty = shunted.duties.byId[TOY.dutyLocal]!;
+    duty.legs = duty.legs.map((leg) =>
+      leg.kind === 'stable' ? { ...leg, trackId: TOY.d2 } : leg,
+    );
+    const tl = buildIndex(shunted).timelines.get(TOY.localDown)!;
+    expect(tl.layover?.berths.map((b) => b.trackId)).toEqual([TOY.d1, TOY.d2, TOY.d1]);
+
+    const at = (t: number) => trainRuntimeAt(tl, t, NO_DELAY, shunted).phase;
+    const start = at(8 * H + 10 * M + 31);
+    if (start.phase !== 'layover') throw new Error('unreachable');
+    expect(start.trackId).toBe(TOY.d2);
+    expect(start.fromTrackId).toBe(TOY.d1);
+    expect(start.shunt).toBeGreaterThan(0);
+    expect(start.shunt).toBeLessThan(1);
+
+    // A minute and a half later the move is over and it is simply standing.
+    const settled = at(8 * H + 13 * M);
+    if (settled.phase !== 'layover') throw new Error('unreachable');
+    expect(settled.trackId).toBe(TOY.d2);
+    expect(settled.shunt).toBeUndefined();
+
+    // …and it is back on the departure road before 回8002 leaves.
+    const before = at(8 * H + 20 * M - 1);
+    if (before.phase !== 'layover') throw new Error('unreachable');
+    expect(before.trackId).toBe(TOY.d1);
   });
 
   it('dwells exactly at the booked arrival, not runs', () => {
@@ -170,6 +235,37 @@ describe('trainRuntimeAt', () => {
     expect(rt.phase.phase).toBe('passing');
     if (rt.phase.phase !== 'passing') throw new Error('unreachable');
     expect(rt.phase.stationId).toBe(TOY.stationB);
+    // …and it names the leg it is on, so the view places it exactly as it
+    // places a running train.
+    expect(rt.phase.fromStationId).toBe(TOY.stationB);
+    expect(rt.phase.toStationId).toBe(TOY.stationC);
+  });
+
+  it('keeps moving through a 通過 instead of snapping onto the station', () => {
+    // 通過 is a label on a leg. Reporting the station's km for the six seconds
+    // either side of it made the marker jump forward, stand still and jump
+    // again — twelve seconds of a train visibly not obeying its own timetable.
+    const passAt = 8 * H + 4 * M + 20;
+    let prev = -Infinity;
+    for (let t = passAt - 12; t <= passAt + 12; t += 1) {
+      const rt = trainRuntimeAt(express, t, NO_DELAY, doc);
+      expect(rt.km, `at ${t}`).toBeGreaterThan(prev);
+      prev = rt.km;
+    }
+    // It is genuinely somewhere else five seconds before and after.
+    expect(trainRuntimeAt(express, passAt - 5, NO_DELAY, doc).km).toBeLessThan(
+      kmToMeters(1) - 20,
+    );
+    expect(trainRuntimeAt(express, passAt + 5, NO_DELAY, doc).km).toBeGreaterThan(
+      kmToMeters(1) + 20,
+    );
+  });
+
+  it('names the roads a running leg leaves from and arrives at', () => {
+    const rt = trainRuntimeAt(local, 8 * H + 60, NO_DELAY, doc);
+    if (rt.phase.phase !== 'running') throw new Error('unreachable');
+    expect(rt.phase.fromTrackId).toBe(TOY.a1);
+    expect(rt.phase.toTrackId).toBe(TOY.b1);
   });
 
   it('carries the formation through from the assignment', () => {

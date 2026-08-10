@@ -7,10 +7,11 @@ import {
   BOTTOM_PAD_LANES,
   computeLineLayout,
   computeStationHalfWidth,
-  depotBoxLayout,
-  DEPOT_BOX_MAX_W,
-  DEPOT_BOX_MIN_W,
+  depotLanePitch,
+  depotPlateLayout,
+  DEPOT_PLATE_H,
   depotStubCap,
+  depotStubReach,
   DROPPED,
   isMajorStop,
   LABEL_BAND_LANES,
@@ -109,19 +110,28 @@ describe('assignStationLanes', () => {
   });
 });
 
-describe('depotStubCap', () => {
-  it('leaves a short yard stub alone', () => {
-    // 500 m of stub off a 17 km line is well inside the cap.
-    expect(depotStubCap(17_000, 75)).toBeGreaterThan(500);
-  });
-
+describe('depotStubCap / depotStubReach', () => {
   it('is generous enough not to shorten a toy line stub', () => {
     expect(depotStubCap(3300, 150)).toBeGreaterThanOrEqual(500);
   });
 
   it('caps a works node parked far off the axis', () => {
-    // 長津田車両工場 is 13 km off a 17 km line; the cap is a small fraction.
-    expect(depotStubCap(17_000, 75)).toBeLessThan(2000);
+    // 長津田車両工場 is 13 km off a 17 km line. Drawn to scale it would be
+    // most of the picture; the cap keeps it a stub off the end.
+    expect(depotStubReach(13_000, 17_000, 75)).toBeLessThan(17_000 * 0.2);
+    expect(depotStubReach(13_000, 17_000, 75)).toBe(depotStubCap(17_000, 75));
+  });
+
+  it('draws a short yard long enough for its roads to be roads', () => {
+    // 鷺沼車庫 is 500 m off a 17 km line — 3% of the width, which no ladder
+    // of ten roads survives being drawn inside.
+    const drawn = depotStubReach(500, 17_000, 75);
+    expect(drawn).toBeGreaterThan(500);
+    expect(drawn).toBeLessThanOrEqual(depotStubCap(17_000, 75));
+  });
+
+  it('leaves a yard that is already long enough at its true length', () => {
+    expect(depotStubReach(500, 3300, 150)).toBe(500);
   });
 });
 
@@ -229,17 +239,43 @@ describe('computeLineLayout', () => {
     expect(section.x0).toBeLessThan(section.x1);
   });
 
-  it('gives the depot a stub lane below the main stack', () => {
+  it('gives every yard road its own lane below the main stack', () => {
     expect(layout.depots).toHaveLength(1);
-    const depot = layout.depots[0]!;
-    expect(depot.index).toBe(layout.mainLaneCount);
-    expect(layout.totalLaneCount).toBe(layout.mainLaneCount + 1);
-    // The stub runs from the depot's km back to the attached station.
-    expect(depot.x0).toBe(kmToMeters(-0.5));
-    expect(depot.x1).toBe(0);
-    expect(depot.junctionX).toBe(0);
-    // Depot stabling tracks resolve to the stub lane.
-    expect(layout.laneOfTrack.get(TOY.x1)).toBe(depot.index);
+    const yard = layout.depots[0]!;
+    expect(yard.laneFrom).toBeGreaterThan(layout.laneUp);
+    expect(yard.tracks.map((r) => r.trackId)).toEqual([TOY.x1]);
+    // Each road is a lane, and the road is what a train is placed on.
+    expect(layout.laneOfTrack.get(TOY.x1)).toBe(yard.tracks[0]!.index);
+    expect(layout.totalLaneCount).toBe(yard.laneTo + 1);
+    // The yard runs from its km in to the edge of the attached station block.
+    expect(yard.endX).toBe(kmToMeters(-0.5));
+    expect(yard.junctionX).toBe(-layout.stationHalfWidth);
+    // …and the throat is between the two, so a train has somewhere to turn in.
+    expect(yard.rootX).toBeLessThan(yard.junctionX);
+    expect(yard.throatX).toBeLessThan(yard.rootX);
+    expect(yard.endX).toBeLessThan(yard.throatX);
+  });
+
+  it('keeps a yard clear of the running lines and of the next yard', () => {
+    const yard = layout.depots[0]!;
+    expect(yard.laneFrom - layout.laneUp).toBeGreaterThan(1);
+    // The throat fans out above the first road.
+    expect(yard.rootLane).toBeLessThan(yard.laneFrom);
+    expect(yard.rootLane).toBeGreaterThan(layout.laneUp);
+  });
+
+  it('joins a road that is not the running lane to the ones it serves', () => {
+    const c = layout.stations.find((s) => s.stationId === TOY.stationC)!;
+    const loop = c.trackLanes.find((l) => l.trackId === TOY.c2)!;
+    const through = c.trackLanes.find((l) => l.trackId === TOY.c1)!;
+    // The 待避線 is switched off the down running lane at both ends…
+    expect(loop.leadLanes).toEqual([layout.laneDown]);
+    expect(loop.bodyX0).toBeGreaterThan(loop.x0);
+    expect(loop.bodyX1).toBeLessThan(loop.x1);
+    // …and the through road needs no lead, because it *is* the running lane.
+    expect(through.leadLanes).toEqual([]);
+    expect(through.bodyX0).toBe(through.x0);
+    expect(through.bodyX1).toBe(through.x1);
   });
 
   it('reserves world space above lane 0 for the station-name band', () => {
@@ -272,6 +308,9 @@ describe('computeLineLayout', () => {
     expect(far.bounds.maxX - far.bounds.minX).toBeLessThan(lineSpan * 1.6);
     // …and the stub still points the right way.
     expect(far.depots[0]!.x0).toBeLessThan(far.depots[0]!.junctionX);
+    // The yard's km stays the routing fact it is; only the drawing is capped.
+    expect(far.depots[0]!.km).toBe(kmToMeters(-40));
+    expect(far.depots[0]!.endX).toBeGreaterThan(kmToMeters(-40));
   });
 
   it('is deterministic', () => {
@@ -316,16 +355,111 @@ describe('placeTrain', () => {
     ).toBe(runningLane(layout, 'up'));
   });
 
-  it('sends anything touching a depot station onto the stub lane', () => {
-    const depotLane = layout.depots[0]!.index;
-    expect(
+  it('swings out of the 待避線 along the lead instead of changing lane at once', () => {
+    const loop = layout.laneOfTrack.get(TOY.c2)!;
+    const down = runningLane(layout, 'down');
+    const at = (km: number): number =>
       placeTrain(layout, {
-        km: kmToMeters(-0.2),
+        km,
         direction: 'down',
-        fromStationId: TOY.stationDepot,
-        toStationId: TOY.stationA,
-      }).lane,
-    ).toBe(depotLane);
+        fromStationId: TOY.stationC,
+        toStationId: TOY.stationD,
+        fromTrackId: TOY.c2,
+        toTrackId: TOY.d1,
+      }).lane;
+
+    const c = layout.stationOf.get(TOY.stationC)!;
+    // On the road at the platform, on the running lane once clear of the
+    // block, and strictly in between all the way along the lead.
+    expect(at(c.x)).toBe(loop);
+    expect(at(c.x1)).toBe(down);
+    const mid = at(c.x1 - layout.stationLeadWidth / 2);
+    expect(mid).toBeGreaterThan(down);
+    expect(mid).toBeLessThan(loop);
+
+    // Monotone: no step back, and no jump bigger than the sampling step.
+    let prev = loop;
+    for (let km = c.x; km <= c.x1; km += 1) {
+      const lane = at(km);
+      expect(lane).toBeLessThanOrEqual(prev + 1e-9);
+      expect(prev - lane).toBeLessThan(0.2);
+      prev = lane;
+    }
+  });
+
+  it('runs a depot leg down the throat onto its own road', () => {
+    const yard = layout.depots[0]!;
+    const road = layout.laneOfTrack.get(TOY.x1)!;
+    const at = (km: number) =>
+      placeTrain(layout, {
+        km,
+        direction: 'up',
+        fromStationId: TOY.stationA,
+        toStationId: TOY.stationDepot,
+        fromTrackId: TOY.a2,
+        toTrackId: TOY.x1,
+      });
+
+    // Ends on the road, having come off the running lane through the throat.
+    expect(at(kmToMeters(-0.5)).lane).toBe(road);
+    expect(at(kmToMeters(-0.5)).x).toBe(yard.berthX);
+    expect(at(0).lane).toBe(layout.laneOfTrack.get(TOY.a2));
+
+    let prev = -Infinity;
+    let lastLane = layout.laneOfTrack.get(TOY.a2)!;
+    for (let km = 0; km >= kmToMeters(-0.5); km -= 5) {
+      const p = at(km);
+      // x runs monotonically outwards along the *drawn* stub…
+      expect(p.x).toBeLessThan(prev === -Infinity ? Infinity : prev);
+      prev = p.x;
+      // …and the lane never jumps.
+      expect(Math.abs(p.lane - lastLane)).toBeLessThan(0.5);
+      lastLane = p.lane;
+    }
+  });
+
+  it('compresses a leg to a works node onto the drawn stub', () => {
+    // 長津田車両工場 sits far off the km axis; a 回送 to it must not fly off
+    // the end of the line while the yard stays where it was drawn.
+    const doc = toyProjectCopy();
+    const depotStation = doc.stations.byId[TOY.stationDepot]!;
+    doc.stations.byId[TOY.stationDepot] = {
+      ...depotStation,
+      kmFromOrigin: kmToMeters(-40),
+    };
+    const far = computeLineLayout(doc);
+    const yard = far.depots[0]!;
+    for (let km = 0; km >= kmToMeters(-40); km -= 500) {
+      const p = placeTrain(far, {
+        km,
+        direction: 'up',
+        fromStationId: TOY.stationA,
+        toStationId: TOY.stationDepot,
+        toTrackId: TOY.x1,
+      });
+      expect(p.x).toBeGreaterThanOrEqual(yard.endX);
+      expect(p.x).toBeLessThanOrEqual(0);
+    }
+  });
+
+  it('walks a shunting formation across the roads it moves between', () => {
+    const from = layout.laneOfTrack.get(TOY.c1)!;
+    const to = layout.laneOfTrack.get(TOY.c2)!;
+    const at = (trackBlend: number): number =>
+      placeTrain(layout, {
+        km: kmToMeters(2),
+        direction: 'down',
+        stationId: TOY.stationC,
+        trackId: TOY.c2,
+        fromTrackId: TOY.c1,
+        trackBlend,
+      }).lane;
+    expect(at(0)).toBe(from);
+    expect(at(1)).toBe(to);
+    expect(at(0.5)).toBeCloseTo((from + to) / 2);
+    // Out-of-range blends clamp rather than fling the marker off the stack.
+    expect(at(-1)).toBe(from);
+    expect(at(4)).toBe(to);
   });
 
   it('falls back to the running lane for an unknown track', () => {
@@ -336,6 +470,24 @@ describe('placeTrain', () => {
         trackId: 'trk-does-not-exist' as never,
       }).lane,
     ).toBe(layout.laneUp);
+  });
+});
+
+describe('depotLanePitch', () => {
+  it('gives a small yard full-height roads', () => {
+    expect(depotLanePitch(1)).toBe(1);
+    expect(depotLanePitch(4)).toBe(1);
+  });
+
+  it('keeps a yard of any size about four lanes deep', () => {
+    // 鷺沼車庫 has ten roads. At the full pitch they would take more vertical
+    // space than the whole running line.
+    for (const n of [5, 10, 24, 60]) {
+      const depth = (n - 1) * depotLanePitch(n);
+      expect(depotLanePitch(n), `${n} roads`).toBeLessThanOrEqual(1);
+      expect(depth, `${n} roads`).toBeLessThanOrEqual(n <= 12 ? 4 : 18);
+    }
+    expect(depotLanePitch(10)).toBeLessThan(depotLanePitch(5));
   });
 });
 
@@ -507,48 +659,36 @@ describe('resolveMarkerSlots', () => {
 // Depot box
 // ---------------------------------------------------------------------------
 
-describe('depotBoxLayout', () => {
-  const base = { centerY: 100, laneHeight: 42, viewportWidth: 1400 };
+describe('depotPlateLayout', () => {
+  const base = { centerY: 100, contentWidth: 90, viewportWidth: 1400 };
 
-  it('gives a sliver of a stub a legible minimum box', () => {
-    const box = depotBoxLayout({ ...base, junctionX: 1000, stubEndX: 1037 });
-    expect(box.w).toBe(DEPOT_BOX_MIN_W);
-    expect(box.showCodes).toBe(false);
+  it('is only as wide as its text — the roads are the drawing now', () => {
+    const plate = depotPlateLayout({ ...base, junctionX: 200, stubEndX: 500 });
+    expect(plate.w).toBeGreaterThan(base.contentWidth);
+    expect(plate.w).toBeLessThan(base.contentWidth + 20);
+    expect(plate.h).toBe(DEPOT_PLATE_H);
+    expect(plate.y).toBeCloseTo(base.centerY - DEPOT_PLATE_H / 2);
   });
 
-  it('grows with the stub as the user zooms in, and then lists formations', () => {
-    const narrow = depotBoxLayout({ ...base, junctionX: 200, stubEndX: 320 });
-    const wide = depotBoxLayout({ ...base, junctionX: 200, stubEndX: 500 });
-    expect(wide.w).toBeGreaterThan(narrow.w);
-    expect(narrow.showCodes).toBe(false);
-    expect(wide.showCodes).toBe(true);
-  });
-
-  it('stops growing once the box would dominate the view', () => {
-    const box = depotBoxLayout({ ...base, junctionX: 0, stubEndX: 1200 });
-    expect(box.w).toBe(DEPOT_BOX_MAX_W);
-  });
-
-  it('hangs the box off the far end of the stub, on the correct side', () => {
-    const right = depotBoxLayout({ ...base, junctionX: 200, stubEndX: 500 });
+  it('hangs off the far end of the yard, on the correct side', () => {
+    const right = depotPlateLayout({ ...base, junctionX: 200, stubEndX: 500 });
     expect(right.outward).toBe(1);
     expect(right.x + right.w).toBeCloseTo(500);
 
-    const left = depotBoxLayout({ ...base, junctionX: 500, stubEndX: 200 });
+    const left = depotPlateLayout({ ...base, junctionX: 500, stubEndX: 200 });
     expect(left.outward).toBe(-1);
     expect(left.x).toBeCloseTo(200);
   });
 
   it('never hangs off the edge of the viewport', () => {
-    const box = depotBoxLayout({ ...base, junctionX: 1380, stubEndX: 1480 });
-    expect(box.x).toBeGreaterThanOrEqual(0);
-    expect(box.x + box.w).toBeLessThanOrEqual(base.viewportWidth);
+    const plate = depotPlateLayout({ ...base, junctionX: 1380, stubEndX: 1480 });
+    expect(plate.x).toBeGreaterThanOrEqual(0);
+    expect(plate.x + plate.w).toBeLessThanOrEqual(base.viewportWidth);
   });
 
-  it('fits inside its lane', () => {
-    const box = depotBoxLayout({ ...base, junctionX: 200, stubEndX: 500 });
-    expect(box.h).toBeLessThanOrEqual(base.laneHeight);
-    expect(box.y).toBeCloseTo(base.centerY - box.h / 2);
+  it('stays legible for a yard with no name to speak of', () => {
+    const plate = depotPlateLayout({ ...base, contentWidth: 0, junctionX: 0, stubEndX: 40 });
+    expect(plate.w).toBeGreaterThanOrEqual(32);
   });
 });
 

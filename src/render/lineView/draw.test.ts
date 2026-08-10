@@ -30,7 +30,7 @@ import {
   placementOf,
   type LineDynamicEnv,
 } from './draw';
-import { computeLineLayout, LANE_HEIGHT } from './layout';
+import { computeLineLayout, laneCenterY, LANE_HEIGHT } from './layout';
 
 const VIEWPORT = { width: 900, height: 200 };
 
@@ -105,13 +105,70 @@ describe('drawLineStatic', () => {
     expect(styles.some((s) => s.startsWith('rgba(251, 191, 36'))).toBe(true);
   });
 
-  it('draws the depot stub but leaves the box to the dynamic layer', () => {
+  it('draws the yard throat but leaves the name plate to the dynamic layer', () => {
     const { layout, camera } = makeEnv();
     const ctx = createRecordingContext();
     drawLineStatic(ctx, { layout, camera, theme: FALLBACK_THEME, viewport: VIEWPORT });
-    // The box is sized from the occupancy, which the static layer cannot see.
+    // The plate carries the live count, which the static layer cannot see.
     expect(ctx.ops('fillText').map((c) => c.args[0])).not.toContain('A車庫');
     expect(ctx.ops('setLineDash').some((c) => String(c.args[0]) === '6,4')).toBe(true);
+  });
+
+  it('leads the throat off both running lines', () => {
+    const { layout, camera } = makeEnv();
+    const ctx = createRecordingContext();
+    drawLineStatic(ctx, { layout, camera, theme: FALLBACK_THEME, viewport: VIEWPORT });
+    const yard = layout.depots[0]!;
+    const junction = worldToScreenX(camera, yard.junctionX);
+    const starts = ctx.ops('moveTo').map((c) => Number(c.args[0]));
+    // Two throat legs leave the junction: 出庫 and 入庫 use both directions.
+    expect(starts.filter((x) => Math.abs(x - junction) < 0.6).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('draws every road of the yard, and names them once they are long enough', () => {
+    const { layout } = makeEnv();
+    const yard = layout.depots[0]!;
+    expect(yard.tracks).toHaveLength(1);
+
+    const zoomed = createCamera({ x: yard.endX - 200, y: 0, scaleX: 2, scaleY: LANE_HEIGHT });
+    const ctx = createRecordingContext();
+    drawLineStatic(ctx, {
+      layout,
+      camera: zoomed,
+      theme: FALLBACK_THEME,
+      viewport: { width: 1400, height: 600 },
+    });
+    const texts = ctx.ops('fillText').map((c) => String(c.args[0]));
+    expect(texts).toContain('留置1番');
+  });
+
+  it('joins a 待避線 to the running line at both ends', () => {
+    const { layout, camera } = makeEnv();
+    const ctx = createRecordingContext();
+    drawLineStatic(ctx, { layout, camera, theme: FALLBACK_THEME, viewport: VIEWPORT });
+
+    const loop = layout.stations
+      .find((s) => s.stationId === TOY.stationC)!
+      .trackLanes.find((l) => l.trackId === TOY.c2)!;
+    const runY = crisp(laneCenterY(layout.laneDown, camera.y, camera.scaleY));
+    const loopY = crisp(laneCenterY(loop.index, camera.y, camera.scaleY));
+    const entry = worldToScreenX(camera, loop.x0);
+    const bodyStart = worldToScreenX(camera, loop.bodyX0);
+    expect(entry).toBeLessThan(bodyStart);
+
+    // The entry lead runs from the running lane at the block edge down onto
+    // the loop — without it the 待避線 would be a segment with no way in.
+    const near = (a: number, b: number): boolean => Math.abs(a - b) < 0.6;
+    const drawn = ctx.calls.some(
+      (call, i) =>
+        call.op === 'moveTo' &&
+        near(Number(call.args[0]), entry) &&
+        near(Number(call.args[1]), runY) &&
+        ctx.calls[i + 1]?.op === 'lineTo' &&
+        near(Number(ctx.calls[i + 1]!.args[0]), bodyStart) &&
+        near(Number(ctx.calls[i + 1]!.args[1]), loopY),
+    );
+    expect(drawn).toBe(true);
   });
 
   it('places every station name on a row with no two overlapping', () => {
@@ -273,6 +330,57 @@ describe('drawLineDynamic', () => {
     expect(texts.some((t) => /^留置 \d+本$/.test(t))).toBe(true);
   });
 
+  it('stands each stabled formation on the road the plan berths it on', () => {
+    const { layout, trainTypes, formations } = makeEnv();
+    const scene = sampleScene(3 * 3600);
+    const yard = layout.depots[0]!;
+    const roadLane = layout.laneOfTrack.get(TOY.x1)!;
+    // Zoomed into the yard, so there is room for the codes themselves.
+    const camera = createCamera({ x: yard.endX - 100, y: 0, scaleX: 2, scaleY: LANE_HEIGHT });
+    const ctx = createRecordingContext();
+    drawLineDynamic(ctx, {
+      layout,
+      camera,
+      theme: FALLBACK_THEME,
+      viewport: { width: 1400, height: 700 },
+      snapshot: scene.snapshot,
+      trainTypes,
+      formations,
+      showDeadhead: true,
+    });
+
+    const codes = ctx.ops('fillText').filter((c) => String(c.args[0]).endsWith('F'));
+    expect(codes.length).toBeGreaterThan(0);
+    // T01F's duty leaves the yard from 留置1番, so it is drawn on that road…
+    const onRoad = codes.find((c) => c.args[0] === 'T01F')!;
+    expect(Number(onRoad.args[2])).toBeCloseTo(
+      laneCenterY(roadLane, camera.y, camera.scaleY),
+      3,
+    );
+    // …and T02F, whose duty never touches the yard, sits on the yard lead.
+    const onLead = codes.find((c) => c.args[0] === 'T02F')!;
+    expect(Number(onLead.args[2])).toBeCloseTo(
+      laneCenterY(yard.leadLane, camera.y, camera.scaleY),
+      3,
+    );
+  });
+
+  it('keeps the terminated train on screen, badged 折返, until its stock leaves', () => {
+    // 各101 arrives D at 08:10:30; 回8002 takes the same stock out at 08:20.
+    const scene = sampleScene(8 * 3600 + 15 * 60);
+    const env = dynamicEnv({ snapshot: scene.snapshot });
+    const hits = new HitRects<TrainId>();
+    const ctx = createRecordingContext();
+    drawLineDynamic(ctx, { ...env, hits });
+
+    const texts = ctx.ops('fillText').map((c) => String(c.args[0]));
+    expect(texts).toContain('各 101');
+    expect(texts).toContain('折返');
+    expect(hits.rectOf(TOY.localDown)).toBeDefined();
+    // The successor has not started, so exactly one marker is on the platform.
+    expect(hits.rectOf(TOY.depotIn)).toBeUndefined();
+  });
+
   it('never lets two marker boxes on the same lane overlap', () => {
     const env = dynamicEnv({ snapshot: bunched(6) });
     const hits = new HitRects<TrainId>();
@@ -374,6 +482,75 @@ describe('digest positions', () => {
       TOY.stationD,
     ]);
     expect(stations).toMatchSnapshot();
+  });
+
+  it('never teleports a train, in x or across the lanes', () => {
+    // The complaint this exists for: a train that jumps a lane the instant it
+    // departs, snaps onto a station it is passing, or slides along the bottom
+    // of the picture for the whole of a depot run.
+    const layout = computeLineLayout(sampleScene().doc);
+    const STEP = 1;
+    // Half a lane per second still reads as movement; the jumps this test is
+    // about were a whole lane — or three, into the yard — in a single frame.
+    const MAX_LANE_STEP = 0.5;
+    // 110 km/h is 31 m/s, so a second is at most ~31 m of line.
+    const MAX_X_STEP = 40;
+
+    for (const id of [TOY.localDown, TOY.expressDown, TOY.depotOut, TOY.depotIn]) {
+      let prev: { x: number; lane: number } | undefined;
+      let seen = 0;
+      for (let t = 7 * 3600; t <= 8 * 3600 + 35 * 60; t += STEP) {
+        const train = sampleScene(t).snapshot.trains.find((r) => r.trainId === id);
+        const drawn =
+          train !== undefined &&
+          train.phase.phase !== 'pending' &&
+          train.phase.phase !== 'finished';
+        if (!drawn) {
+          prev = undefined;
+          continue;
+        }
+        seen++;
+        const p = placementOf(layout, train);
+        if (prev !== undefined) {
+          expect(Math.abs(p.lane - prev.lane), `${id} lane at ${t}`).toBeLessThan(
+            MAX_LANE_STEP,
+          );
+          expect(Math.abs(p.x - prev.x), `${id} x at ${t}`).toBeLessThan(MAX_X_STEP);
+        }
+        prev = { x: p.x, lane: p.lane };
+      }
+      expect(seen, `${id} was never drawn`).toBeGreaterThan(0);
+    }
+  });
+
+  it('hands a turnback over without a gap and without a jump', () => {
+    const layout = computeLineLayout(sampleScene().doc);
+    const at = (t: number): Array<{ id: string; x: number; lane: number }> =>
+      sampleScene(t)
+        .snapshot.trains.filter(
+          (r) =>
+            r.formationId === TOY.formation1 &&
+            r.phase.phase !== 'pending' &&
+            r.phase.phase !== 'finished',
+        )
+        .map((r) => ({ id: r.trainId, ...placementOf(layout, r) }));
+
+    // Across 各101 → 回8002 at D, the formation is drawn exactly once and the
+    // marker does not move when the identity changes.
+    let prev: { id: string; x: number; lane: number } | undefined;
+    for (let t = 8 * 3600 + 10 * 60; t <= 8 * 3600 + 21 * 60; t += 2) {
+      const drawn = at(t);
+      expect(drawn, `at ${t}`).toHaveLength(1);
+      const now = drawn[0]!;
+      if (prev !== undefined && prev.id !== now.id) {
+        expect(now.x).toBeCloseTo(prev.x, 6);
+        expect(now.lane).toBeCloseTo(prev.lane, 6);
+      }
+      prev = now;
+    }
+    // …and the handover really did happen inside the window.
+    expect(at(8 * 3600 + 15 * 60)[0]!.id).toBe(TOY.localDown);
+    expect(at(8 * 3600 + 21 * 60)[0]!.id).toBe(TOY.depotIn);
   });
 
   it('moves a train to the right as the clock advances', () => {
