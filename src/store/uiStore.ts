@@ -9,11 +9,16 @@
 
 import { create } from 'zustand';
 
+import type { DutyId } from '@/domain/ids';
+import type { Direction } from '@/domain/model';
 import type { Sec, Meters } from '@/domain/units';
 import type { EntityRef } from '@/validation/types';
 import { ROUTES, type RouteName } from '@e2e/testids';
 
 import { useClockStore } from './clockStore';
+
+/** 運行図表 shows both directions, or one of them on its own. */
+export type DirectionFilter = Direction | 'both';
 
 export interface FocusTarget {
   ref: EntityRef;
@@ -36,6 +41,16 @@ export interface UiStoreState {
   focusTarget: FocusTarget | undefined;
   problemPanelOpen: boolean;
   inspectorOpen: boolean;
+  /**
+   * The duty both canvases draw in full colour while everything else dims.
+   *
+   * It lives here rather than in each screen so that switching between 運行図表
+   * and 路線ビュー — or arriving from the inspector's 「運行図表で強調」 — keeps
+   * looking at the same vehicle's day.
+   */
+  highlightDutyId: string | undefined;
+  /** Which direction 運行図表 draws. */
+  diagramDirection: DirectionFilter;
   setRoute(route: RouteName): void;
   select(ref: EntityRef | undefined, additive?: boolean): void;
   setSelected(refs: EntityRef[]): void;
@@ -43,6 +58,10 @@ export interface UiStoreState {
   focusOn(request: FocusRequest): void;
   toggleProblemPanel(): void;
   toggleInspector(): void;
+  setHighlightDuty(dutyId: string | undefined): void;
+  setDiagramDirection(direction: DirectionFilter): void;
+  /** Highlight a duty on whichever canvas can show it, and go there. */
+  showDutyInDiagram(dutyId: DutyId, at?: Sec): void;
 }
 
 /** Routes that can already show a given kind of entity, best first. */
@@ -89,6 +108,8 @@ export const useUiStore = create<UiStoreState>((set, get) => ({
   focusTarget: undefined,
   problemPanelOpen: true,
   inspectorOpen: true,
+  highlightDutyId: undefined,
+  diagramDirection: 'both',
 
   setRoute: (route) => set({ route }),
 
@@ -128,6 +149,27 @@ export const useUiStore = create<UiStoreState>((set, get) => ({
 
   toggleProblemPanel: () => set({ problemPanelOpen: !get().problemPanelOpen }),
   toggleInspector: () => set({ inspectorOpen: !get().inspectorOpen }),
+
+  setHighlightDuty: (dutyId) => set({ highlightDutyId: dutyId }),
+
+  setDiagramDirection: (direction) => set({ diagramDirection: direction }),
+
+  showDutyInDiagram: (dutyId, at) => {
+    if (at !== undefined) useClockStore.getState().seek(at);
+    const current = get().route;
+    // 路線ビュー honours the same highlight, so someone already there stays
+    // there. From anywhere else the string diagram is the view that shows a
+    // whole day at once, which is what a duty is.
+    const route = current === ROUTES.line ? ROUTES.line : ROUTES.diagram;
+    set({
+      route,
+      highlightDutyId: dutyId,
+      // A duty almost always works both directions; leaving a one-way filter
+      // on would hide half of the thing the user just asked to see.
+      diagramDirection: 'both',
+      selected: [{ kind: 'duty', dutyId }],
+    });
+  },
 }));
 
 /** Convenience for the many call sites that focus a bare ref. */

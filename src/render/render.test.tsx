@@ -118,6 +118,24 @@ describe('StringDiagramCanvas', () => {
     mount(<StringDiagramCanvas showDeadhead={false} />);
     expect(screen.getAllByTestId(TID.diagramTrainLine)).toHaveLength(2);
   });
+
+  it('draws one direction on its own', () => {
+    mount(<StringDiagramCanvas direction="up" />);
+    const rows = screen.getAllByTestId(TID.diagramTrainLine);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.getAttribute('data-train-id')).toBe(TOY.depotIn);
+    expect(rows[0]!.getAttribute('data-direction')).toBe('up');
+    // The 待避 pairs two 下り trains and goes with them.
+    expect(screen.queryByTestId(TID.overtakeMarker)).toBeNull();
+  });
+
+  it('names the duty of each line so the shadow can be filtered by 運用', () => {
+    mount(<StringDiagramCanvas />);
+    const local = screen
+      .getAllByTestId(TID.diagramTrainLine)
+      .find((r) => r.getAttribute('data-train-id') === TOY.localDown)!;
+    expect(local.getAttribute('data-duty')).toBe(TOY.dutyLocal);
+  });
 });
 
 describe('StationYardChart', () => {

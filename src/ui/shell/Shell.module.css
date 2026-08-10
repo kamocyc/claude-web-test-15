@@ -185,6 +185,51 @@
   font-family: var(--font-mono);
 }
 
+.inspectorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.inspectorNote {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 8px 0 0;
+}
+
+.inspectorList {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.inspectorList button {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.inspectorList button:hover {
+  background: var(--bg-panel-2);
+}
+
+.inspectorList button span:first-child {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+
 /* -- status bar ----------------------------------------------------------- */
 
 .statusBar {

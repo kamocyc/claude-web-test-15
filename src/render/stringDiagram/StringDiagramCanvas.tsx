@@ -65,6 +65,8 @@ export function StringDiagramCanvas(props: StringDiagramProps) {
     highlightDutyId,
     showDeadhead = true,
     verticalScale = 'km',
+    direction = 'both',
+    selectedTrainIds,
     className,
   } = props;
 
@@ -84,15 +86,23 @@ export function StringDiagramCanvas(props: StringDiagramProps) {
   const layout: DiagramLayout | undefined = useMemo(() => {
     const scene = getRenderScene();
     if (!scene) return undefined;
-    return computeDiagramLayout(scene.index, { verticalScale, showDeadhead });
-  }, [generation, verticalScale, showDeadhead]);
+    return computeDiagramLayout(scene.index, { verticalScale, showDeadhead, direction });
+  }, [generation, verticalScale, showDeadhead, direction]);
 
   const layoutRef = useRef<DiagramLayout | undefined>(undefined);
   layoutRef.current = layout;
   boundsRef.current = layout?.bounds ?? EMPTY_BOUNDS;
 
-  const propsRef = useRef({ highlightDutyId, onSeek });
-  propsRef.current = { highlightDutyId, onSeek };
+  // A string key, not the array, so a caller that rebuilds the array on every
+  // render does not force a redraw of 500 polylines.
+  const selectedKey = (selectedTrainIds ?? []).join(',');
+  const selected = useMemo(
+    () => new Set<string>(selectedKey === '' ? [] : selectedKey.split(',')),
+    [selectedKey],
+  );
+
+  const propsRef = useRef({ highlightDutyId, onSeek, selected });
+  propsRef.current = { highlightDutyId, onSeek, selected };
 
   // Only a change that invalidates the layout re-fits the camera. Depending on
   // `layers` here re-ran this on every render, which meant the view snapped
@@ -102,7 +112,7 @@ export function StringDiagramCanvas(props: StringDiagramProps) {
     fitted.current = false;
     staticKey.current = '';
     markAllDirty();
-  }, [generation, verticalScale, showDeadhead, highlightDutyId, markAllDirty]);
+  }, [generation, verticalScale, showDeadhead, direction, highlightDutyId, markAllDirty]);
 
   // -- the frame ------------------------------------------------------------
   useEffect(() => {
@@ -128,17 +138,19 @@ export function StringDiagramCanvas(props: StringDiagramProps) {
       const cam = cameraRef.current;
       const viewport = viewportRef.current;
       const highlight = propsRef.current.highlightDutyId;
+      const selectedSet = propsRef.current.selected;
       const env = {
         layout: currentLayout,
         camera: cam,
         theme,
         viewport,
+        selected: selectedSet,
         ...(highlight !== undefined ? { highlightDutyId: highlight } : {}),
       };
 
       // The static layer — every polyline — is rebuilt only when the camera
       // or the layout changes. Never on a clock tick.
-      const sKey = `${cam.x}|${cam.y}|${cam.scaleX}|${cam.scaleY}|${highlight ?? ''}`;
+      const sKey = `${cam.x}|${cam.y}|${cam.scaleX}|${cam.scaleY}|${highlight ?? ''}|${[...selectedSet].join(',')}`;
       if (layers.consumeDirty('static') || sKey !== staticKey.current) {
         staticKey.current = sKey;
         const ctx = layers.contextOf('static');

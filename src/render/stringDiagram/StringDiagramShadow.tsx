@@ -35,6 +35,8 @@ export const StringDiagramShadow = memo(function StringDiagramShadow({
           data-testid={TID.diagramTrainLine}
           data-train-id={train.trainId}
           data-type={train.typeName}
+          data-direction={train.direction}
+          data-duty={train.dutyId ?? ''}
           data-point-count={train.points.length}
         >
           {train.label}

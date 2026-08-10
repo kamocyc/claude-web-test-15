@@ -6,7 +6,7 @@
  * E2E suite use the same path, which means it cannot silently break.
  */
 
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
@@ -86,6 +86,34 @@ export function DutiesScreen() {
   const [code, setCode] = useState('');
   const [openTrainId, setOpenTrainId] = useState<string | undefined>(undefined);
   const [expandedDutyId, setExpandedDutyId] = useState<string | undefined>(undefined);
+
+  /**
+   * Arriving from elsewhere — the inspector's 「運用を開く」, a problem, a train
+   * clicked on a canvas — opens the duty in question rather than leaving the
+   * user to find it in a board of 40 rows. A train focuses the duty that works
+   * it, which is the answer to "what does this vehicle do all day?".
+   */
+  const focusTarget = useUiStore((s) => s.focusTarget);
+  const selectedRef = useUiStore((s) => s.selected[0]);
+  const selectedDutyId = selectedRef?.kind === 'duty' ? selectedRef.dutyId : undefined;
+  const selectedTrainId = selectedRef?.kind === 'train' ? selectedRef.trainId : undefined;
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
+
+  useEffect(() => {
+    if (focusTarget === undefined) return;
+    const target = focusTarget.ref;
+    const dutyId =
+      target.kind === 'duty'
+        ? target.dutyId
+        : target.kind === 'train'
+          ? coverage.get(target.trainId)
+          : undefined;
+    if (dutyId === undefined) return;
+    setExpandedDutyId(dutyId);
+    // jsdom has no scrollIntoView; the optional call keeps component tests
+    // exercising the rest of this effect.
+    rowRefs.current.get(dutyId)?.scrollIntoView?.({ block: 'nearest' });
+  }, [focusTarget, coverage]);
 
   const addDuty = (): void => {
     const trimmed = code.trim();
@@ -170,6 +198,11 @@ export function DutiesScreen() {
                   <Fragment key={duty.id}>
                   <tr
                     data-testid={TID.dutyRow(duty.id)}
+                    className={selectedDutyId === duty.id ? styles.selectedRow : undefined}
+                    ref={(el) => {
+                      if (el === null) rowRefs.current.delete(duty.id);
+                      else rowRefs.current.set(duty.id, el);
+                    }}
                     onClick={() => select({ kind: 'duty', dutyId: duty.id })}
                   >
                     <td>
@@ -247,7 +280,12 @@ export function DutiesScreen() {
                   {expanded ? (
                     <tr>
                       <td colSpan={6}>
-                        <DutyDetail duty={duty} />
+                        <DutyDetail
+                          duty={duty}
+                          {...(selectedTrainId === undefined
+                            ? {}
+                            : { highlightTrainId: selectedTrainId })}
+                        />
                       </td>
                     </tr>
                   ) : null}
@@ -330,7 +368,14 @@ export function DutiesScreen() {
  * `train` legs. A duty that parks a set at a terminus for two hours, or takes it
  * into the depot for a 列車検査 mid-day, is now expressible.
  */
-function DutyDetail({ duty }: { duty: Duty }) {
+function DutyDetail({
+  duty,
+  highlightTrainId,
+}: {
+  duty: Duty;
+  /** The train that brought the user here, marked out among the legs. */
+  highlightTrainId?: TrainId;
+}) {
   const doc = useDoc();
   const dispatch = useDispatch();
   const stations = useMemo(() => entityList(doc.stations), [doc]);
@@ -507,7 +552,16 @@ function DutyDetail({ duty }: { duty: Duty }) {
             </tr>
           ) : null}
           {duty.legs.map((leg, index) => (
-            <tr key={`${leg.kind}-${index}`} data-leg-index={index} data-leg-kind={leg.kind}>
+            <tr
+              key={`${leg.kind}-${index}`}
+              data-leg-index={index}
+              data-leg-kind={leg.kind}
+              className={
+                leg.kind === 'train' && leg.trainId === highlightTrainId
+                  ? styles.selectedRow
+                  : undefined
+              }
+            >
               <td className={styles.num}>{index + 1}</td>
               <td>{leg.kind === 'train' ? '列車' : leg.kind === 'stable' ? '留置' : '検査'}</td>
               <td>
