@@ -290,14 +290,41 @@ describe('computeLineLayout', () => {
 
     expect(stub.stubSide).toBe(1);
     expect(platform.stubSide).toBe(0);
-    // It starts inside the station and reaches out past the far end of it…
-    expect(stub.bodyX0).toBeLessThan(d.x1);
-    expect(stub.bodyX1).toBeGreaterThan(d.x1);
+    // It leaves the running line where every other road at this station does —
+    // the edge of the block — and everything it has is beyond that edge.
+    expect(stub.x0).toBe(d.x1);
+    expect(stub.bodyX0).toBeGreaterThan(d.x1);
+    expect(stub.bodyX1).toBeGreaterThan(stub.bodyX0);
+    // It never sits on a running lane; an up train would be drawn along it.
+    expect(stub.index).not.toBe(withSiding.laneDown);
+    expect(stub.index).not.toBe(withSiding.laneUp);
     // …and a train berthed on it is drawn out there, not on the platform.
     expect(withSiding.berthOfTrack.get(TOY.d2)!).toBeGreaterThan(d.x1);
     expect(withSiding.berthOfTrack.get(TOY.d1)!).toBe(d.x);
     // The world grows to hold it.
     expect(withSiding.bounds.maxX).toBeGreaterThanOrEqual(stub.x1);
+  });
+
+  it('gives each 引上線 an inner lane of its own', () => {
+    // 溝の口 has four roads through it and two tail tracks. Counting all six
+    // as through roads made the stack six deep and put a tail track on the up
+    // running lane, where every up train was then drawn running along it.
+    const doc = toyProjectCopy();
+    for (const id of [TOY.d1, TOY.d2]) {
+      doc.stationTracks.byId[id] = {
+        ...doc.stationTracks.byId[id]!,
+        usage: 'stabling',
+        directions: ['down', 'up'],
+      };
+    }
+    const l = computeLineLayout(doc);
+    const stubs = [TOY.d1, TOY.d2].map((id) => l.laneOfTrack.get(id)!);
+
+    expect(new Set(stubs).size).toBe(2);
+    for (const lane of stubs) {
+      expect(lane).not.toBe(l.laneDown);
+      expect(lane).not.toBe(l.laneUp);
+    }
   });
 
   it('draws a platform long enough to read as one', () => {
@@ -509,6 +536,94 @@ describe('placeTrain', () => {
     // Out-of-range blends clamp rather than fling the marker off the stack.
     expect(at(-1)).toBe(from);
     expect(at(4)).toBe(to);
+  });
+
+  it('leaves a 引上線 along the drawn stub, not across the middle of it', () => {
+    // 溝の口 is the case this exists for: two tail tracks off the 梶が谷 end,
+    // and stock that runs out of them towards 大井町 every few minutes.
+    const doc = toyProjectCopy();
+    doc.stationTracks.byId[TOY.d2] = {
+      ...doc.stationTracks.byId[TOY.d2]!,
+      usage: 'stabling',
+      directions: ['down', 'up'],
+    };
+    const l = computeLineLayout(doc);
+    const stub = l.roadOfTrack.get(TOY.d2)!;
+    const up = runningLane(l, 'up');
+
+    // Sample by *x*, which is what the road is drawn in — invert the linear
+    // km → x mapping the leg uses.
+    const d = l.stationOf.get(TOY.stationD)!;
+    const c = l.stationOf.get(TOY.stationC)!;
+    const laneAtX = (x: number): number => {
+      const f = (x - stub.berthX) / (c.x - stub.berthX);
+      return placeTrain(l, {
+        km: d.km + (c.km - d.km) * f,
+        direction: 'up',
+        fromStationId: TOY.stationD,
+        fromTrackId: TOY.d2,
+        toStationId: TOY.stationC,
+        toTrackId: TOY.c3,
+      }).lane;
+    };
+
+    // Along the flat body it is on the stub; at the throat it has joined the
+    // running lane; in between it is strictly on the lead.
+    expect(laneAtX(stub.berthX)).toBe(stub.index);
+    expect(laneAtX(stub.bodyX0)).toBeCloseTo(stub.index, 6);
+    expect(laneAtX(stub.x0)).toBeCloseTo(up, 6);
+    const mid = laneAtX((stub.bodyX0 + stub.x0) / 2);
+    expect(mid).toBeGreaterThan(stub.index);
+    expect(mid).toBeLessThan(up);
+
+    // Monotone all the way out, with no jump.
+    let prev = stub.index;
+    for (let x = stub.berthX; x >= stub.x0; x -= 2) {
+      const lane = laneAtX(x);
+      expect(lane).toBeGreaterThanOrEqual(prev - 1e-9);
+      expect(lane - prev).toBeLessThan(0.2);
+      prev = lane;
+    }
+  });
+
+  it('shunts onto a 引上線 through the throat both roads are wired to', () => {
+    const doc = toyProjectCopy();
+    doc.stationTracks.byId[TOY.d2] = {
+      ...doc.stationTracks.byId[TOY.d2]!,
+      usage: 'stabling',
+      directions: ['down', 'up'],
+    };
+    const l = computeLineLayout(doc);
+    const d = l.stationOf.get(TOY.stationD)!;
+    const stub = l.roadOfTrack.get(TOY.d2)!;
+    const platform = l.laneOfTrack.get(TOY.d1)!;
+    const at = (trackBlend: number) =>
+      placeTrain(l, {
+        km: d.km,
+        direction: 'down',
+        stationId: TOY.stationD,
+        trackId: TOY.d2,
+        fromTrackId: TOY.d1,
+        trackBlend,
+      });
+
+    expect(at(0).lane).toBe(platform);
+    expect(at(0).x).toBe(d.x);
+    expect(at(1).lane).toBe(stub.index);
+    expect(at(1).x).toBe(stub.berthX);
+
+    // x only ever moves outwards, and the lane never jumps: the move is one
+    // continuous run along drawn track rather than a diagonal across the
+    // picture.
+    let prevX = -Infinity;
+    let prevLane = platform;
+    for (let f = 0; f <= 1; f += 0.02) {
+      const p = at(f);
+      expect(p.x).toBeGreaterThanOrEqual(prevX);
+      expect(Math.abs(p.lane - prevLane)).toBeLessThan(0.6);
+      prevX = p.x;
+      prevLane = p.lane;
+    }
   });
 
   it('falls back to the running lane for an unknown track', () => {
