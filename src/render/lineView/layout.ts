@@ -39,12 +39,17 @@
  * ## Label and marker placement
  *
  * The other half of this module is the *screen-space* geometry that keeps the
- * view readable when the line is dense: which station names survive at the
- * current zoom (`StationLabelPlacer`), where a train's marker box may sit when
- * its neighbours are closer together than a marker is wide (`MarkerSlots`),
- * and how big a depot box can be (`depotBoxLayout`). All three are pure
- * number-crunching with no canvas, and all three are allocation-free after
- * warm-up so the render loop can call them every frame.
+ * view readable when the line is dense: which station and train labels survive
+ * at the current zoom and on which row (`StationLabelPlacer`), and where a
+ * yard's name plate goes (`depotPlateLayout`). Both are pure number-crunching
+ * with no canvas, and both are allocation-free after warm-up so the render loop
+ * can call them every frame.
+ *
+ * Note what is *not* here any more: nothing moves a train to make room. A
+ * marker that slides along its lane to avoid its neighbour is a marker in the
+ * wrong place, and on a line view the position is the whole message. Crowding
+ * is resolved by moving the *label* to a free row, or by dropping the label and
+ * leaving the dot.
  */
 
 import type { DepotId, StationId, StationTrackId } from '@/domain/ids';
@@ -948,22 +953,27 @@ export interface LabelCandidate {
 export const DROPPED = -1;
 
 /**
- * Which station names can be drawn, and on which row.
+ * Which labels can be drawn, and on which row.
  *
  * The line has 23 stations in 16.9 km and the first eight are inside the first
  * two kilometres, so at the fitted zoom their names simply cannot all be
  * drawn. Shrinking the font until they fit trades one unreadable picture for
  * another, so instead:
  *
- *   1. names are placed most-important-first (so a 急行 stop can never be
+ *   1. labels are placed most-important-first (so a 急行 stop can never be
  *      crowded out by the 各停 stop next to it),
- *   2. each name takes the topmost row it fits on — two rows roughly doubles
+ *   2. each label takes the topmost row it fits on — two rows roughly doubles
  *      the density the view survives,
- *   3. a name with no free row is dropped, and reappears on its own as the
+ *   3. a label with no free row is dropped, and reappears on its own as the
  *      user zooms in and its neighbours move apart.
  *
  * The result is overlap-free **by construction**: a row only ever accepts an
  * interval that misses everything already on it.
+ *
+ * Train labels use the same solver with a **preferred row** — the row beside
+ * the train — and a drift limit, so a label lands as close to its dot as it
+ * can get without landing on another label. That is the whole reason the dots
+ * themselves never have to move.
  *
  * Reusable and allocation-free after the first `push` of a given size, because
  * this runs on every static redraw — which means every frame of a pan.
@@ -972,6 +982,8 @@ export class StationLabelPlacer {
   private xs = new Float64Array(0);
   private widths = new Float64Array(0);
   private priorities = new Float64Array(0);
+  /** Preferred row, or < 0 for "topmost that fits". */
+  private prefer = new Float64Array(0);
   private rows = new Int32Array(0);
   private order = new Int32Array(0);
   /** Per row: parallel interval lists, `rowCap` entries each. */
@@ -981,6 +993,7 @@ export class StationLabelPlacer {
   private n = 0;
   private rowLimit = 2;
   private gap = LABEL_GAP;
+  private maxDrift = Infinity;
 
   get count(): number {
     return this.n;
@@ -990,22 +1003,35 @@ export class StationLabelPlacer {
     return this.rowLimit;
   }
 
-  /** Begin a new placement pass. `rows` is clamped to at least one. */
-  reset(rows = 2, gap = LABEL_GAP): void {
+  /**
+   * Begin a new placement pass. `rows` is clamped to at least one.
+   *
+   * `maxDrift` bounds how far a candidate with a preferred row may be pushed
+   * from it, in rows — a train label six rows from its train is worse than no
+   * label at all, because it looks like it belongs to a different train.
+   */
+  reset(rows = 2, gap = LABEL_GAP, maxDrift = Infinity): void {
     this.n = 0;
     this.rowLimit = Math.max(1, Math.floor(rows));
     this.gap = gap;
+    this.maxDrift = maxDrift;
     this.ensureRows();
     this.rowCount.fill(0);
   }
 
-  /** Register a candidate; returns its slot index. */
-  push(x: number, width: number, priority: number): number {
+  /**
+   * Register a candidate; returns its slot index.
+   *
+   * `preferredRow` asks for a row and takes the nearest free one; omitting it
+   * asks for the topmost free row, which is what a station name wants.
+   */
+  push(x: number, width: number, priority: number, preferredRow = -1): number {
     if (this.n === this.xs.length) this.grow();
     const i = this.n++;
     this.xs[i] = x;
     this.widths[i] = width;
     this.priorities[i] = priority;
+    this.prefer[i] = preferredRow;
     this.rows[i] = DROPPED;
     return i;
   }
@@ -1036,7 +1062,12 @@ export class StationLabelPlacer {
       const half = this.widths[i]! / 2;
       const left = this.xs[i]! - half - this.gap;
       const right = this.xs[i]! + half + this.gap;
-      for (let r = 0; r < this.rowLimit; r++) {
+      const want = this.prefer[i]!;
+      const steps =
+        want < 0 ? this.rowLimit : Math.min(this.rowLimit, 2 * this.maxDrift + 1);
+      for (let step = 0; step < steps; step++) {
+        const r = want < 0 ? step : this.nearestRow(want, step);
+        if (r < 0 || r >= this.rowLimit) continue;
         if (!this.free(r, left, right)) continue;
         const base = r * this.xs.length;
         const c = this.rowCount[r]!;
@@ -1047,6 +1078,18 @@ export class StationLabelPlacer {
         break;
       }
     }
+  }
+
+  /**
+   * The `step`-th row out from `want`: itself, then below, then above.
+   *
+   * Below first, because a label under its train reads as belonging to it
+   * while one above it is easily mistaken for the lane overhead.
+   */
+  private nearestRow(want: number, step: number): number {
+    const offset = step % 2 === 1 ? (step + 1) / 2 : -(step / 2);
+    if (Math.abs(offset) > this.maxDrift) return -1;
+    return Math.round(want) + offset;
   }
 
   /** Row of slot `i`, or `DROPPED`. */
@@ -1089,9 +1132,12 @@ export class StationLabelPlacer {
     widths.set(this.widths);
     const priorities = new Float64Array(cap);
     priorities.set(this.priorities);
+    const prefer = new Float64Array(cap);
+    prefer.set(this.prefer);
     this.xs = xs;
     this.widths = widths;
     this.priorities = priorities;
+    this.prefer = prefer;
     this.rows = new Int32Array(cap);
     this.order = new Int32Array(cap);
     this.rowLeft = new Float64Array(0);
@@ -1110,174 +1156,6 @@ export function resolveStationLabels(
   placer.solve();
   return candidates.map((_, i) => placer.rowAt(i));
 }
-
-// ---------------------------------------------------------------------------
-// Train marker de-overlap
-// ---------------------------------------------------------------------------
-
-/**
- * Where each train's marker box may sit, given that markers are a fixed 92 px
- * wide and the fitted zoom puts adjacent stations 45 px apart.
- *
- * The box is allowed to slide *along its lane*; the train's true position is
- * kept separately and is what the tick and the leader line point at, so the
- * km reading stays unambiguous while the label stays readable. Trains never
- * change lane here — the lane carries meaning (待避線 vs through line) and is
- * not negotiable.
- *
- * The slide is the exact least-squares answer, not a greedy push: minimise
- * `Σ (placed_i − desired_i)²` subject to `placed_{i+1} ≥ placed_i + step`.
- * Substituting `u_i = placed_i − i·step` turns that into isotonic regression
- * on `u`, which pool-adjacent-violators solves in one pass. The practical
- * difference from a greedy left-to-right push is that a cluster ends up
- * *centred* on the trains in it rather than smeared to the right.
- */
-export class MarkerSlots {
-  private lanes = new Float64Array(0);
-  private desired = new Float64Array(0);
-  private placed = new Float64Array(0);
-  private order = new Int32Array(0);
-  private blockSum = new Float64Array(0);
-  private blockCount = new Int32Array(0);
-  private n = 0;
-
-  get count(): number {
-    return this.n;
-  }
-
-  reset(): void {
-    this.n = 0;
-  }
-
-  /** Register a marker centre; returns its slot index. */
-  push(lane: number, x: number): number {
-    if (this.n === this.lanes.length) this.grow();
-    const i = this.n++;
-    this.lanes[i] = lane;
-    this.desired[i] = x;
-    this.placed[i] = x;
-    return i;
-  }
-
-  solve(width: number, gap: number): void {
-    const n = this.n;
-    const step = width + gap;
-    for (let i = 0; i < n; i++) {
-      this.order[i] = i;
-      this.placed[i] = this.desired[i]!;
-    }
-    for (let i = 1; i < n; i++) {
-      const v = this.order[i]!;
-      let j = i - 1;
-      while (j >= 0 && this.before(v, this.order[j]!)) {
-        this.order[j + 1] = this.order[j]!;
-        j--;
-      }
-      this.order[j + 1] = v;
-    }
-
-    let s = 0;
-    while (s < n) {
-      const lane = this.lanes[this.order[s]!]!;
-      let e = s + 1;
-      while (e < n && this.lanes[this.order[e]!] === lane) e++;
-      this.solveRun(s, e, step);
-      s = e;
-    }
-  }
-
-  /** Isotonic regression over `order[s..e)`, all on one lane. */
-  private solveRun(s: number, e: number, step: number): void {
-    let m = 0;
-    for (let k = s; k < e; k++) {
-      const v = this.desired[this.order[k]!]! - (k - s) * step;
-      this.blockSum[m] = v;
-      this.blockCount[m] = 1;
-      m++;
-      while (
-        m > 1 &&
-        this.blockSum[m - 1]! / this.blockCount[m - 1]! <
-          this.blockSum[m - 2]! / this.blockCount[m - 2]!
-      ) {
-        this.blockSum[m - 2] = this.blockSum[m - 2]! + this.blockSum[m - 1]!;
-        this.blockCount[m - 2] = this.blockCount[m - 2]! + this.blockCount[m - 1]!;
-        m--;
-      }
-    }
-    let k = s;
-    for (let b = 0; b < m; b++) {
-      const avg = this.blockSum[b]! / this.blockCount[b]!;
-      for (let j = 0; j < this.blockCount[b]!; j++) {
-        this.placed[this.order[k]!] = avg + (k - s) * step;
-        k++;
-      }
-    }
-  }
-
-  /** Resolved marker centre for slot `i`. */
-  xAt(i: number): number {
-    return this.placed[i] ?? 0;
-  }
-
-  /** True screen position of slot `i` — what the tick points at. */
-  anchorAt(i: number): number {
-    return this.desired[i] ?? 0;
-  }
-
-  /** How far slot `i` had to move to stop overlapping its neighbours. */
-  shiftAt(i: number): number {
-    return (this.placed[i] ?? 0) - (this.desired[i] ?? 0);
-  }
-
-  private before(a: number, b: number): boolean {
-    const la = this.lanes[a]!;
-    const lb = this.lanes[b]!;
-    if (la !== lb) return la < lb;
-    const xa = this.desired[a]!;
-    const xb = this.desired[b]!;
-    if (xa !== xb) return xa < xb;
-    return a < b;
-  }
-
-  private grow(): void {
-    const cap = Math.max(64, this.lanes.length * 2);
-    const lanes = new Float64Array(cap);
-    lanes.set(this.lanes);
-    const desired = new Float64Array(cap);
-    desired.set(this.desired);
-    this.lanes = lanes;
-    this.desired = desired;
-    this.placed = new Float64Array(cap);
-    this.order = new Int32Array(cap);
-    this.blockSum = new Float64Array(cap);
-    this.blockCount = new Int32Array(cap);
-  }
-}
-
-export interface ResolvedMarker {
-  /** Where the box is drawn. */
-  x: number;
-  /** Where the train actually is. */
-  anchorX: number;
-  lane: number;
-}
-
-/** Convenience wrapper over `MarkerSlots` for tests and one-off calls. */
-export function resolveMarkerSlots(
-  items: ReadonlyArray<{ lane: number; x: number }>,
-  width: number,
-  gap: number,
-): ResolvedMarker[] {
-  const slots = new MarkerSlots();
-  slots.reset();
-  for (const it of items) slots.push(it.lane, it.x);
-  slots.solve(width, gap);
-  return items.map((it, i) => ({ x: slots.xAt(i), anchorX: it.x, lane: it.lane }));
-}
-
-// ---------------------------------------------------------------------------
-// Depot box
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Depot name plate

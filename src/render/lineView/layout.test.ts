@@ -18,7 +18,6 @@ import {
   laneCenterY,
   LANE_HEIGHT,
   placeTrain,
-  resolveMarkerSlots,
   resolveStationLabels,
   runningLane,
   stationLabelPriority,
@@ -583,75 +582,6 @@ describe('resolveStationLabels', () => {
 
   it('survives an empty line', () => {
     expect(resolveStationLabels([])).toEqual([]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Marker de-overlap
-// ---------------------------------------------------------------------------
-
-describe('resolveMarkerSlots', () => {
-  const W = 92;
-  const GAP = 4;
-
-  it('leaves well-separated markers exactly where they are', () => {
-    const out = resolveMarkerSlots([{ lane: 0, x: 100 }, { lane: 0, x: 400 }], W, GAP);
-    expect(out.map((r) => r.x)).toEqual([100, 400]);
-  });
-
-  it('separates a bunch to at least a marker width apart', () => {
-    const items = [0, 20, 40, 60, 80].map((x) => ({ lane: 0, x }));
-    const out = resolveMarkerSlots(items, W, GAP);
-    for (let i = 1; i < out.length; i++) {
-      expect(out[i]!.x - out[i - 1]!.x).toBeGreaterThanOrEqual(W + GAP - 1e-9);
-    }
-  });
-
-  it('centres a cluster on the trains in it rather than pushing it aside', () => {
-    // Three trains stacked on one point: the middle one must not move.
-    const out = resolveMarkerSlots(
-      [{ lane: 0, x: 500 }, { lane: 0, x: 500 }, { lane: 0, x: 500 }],
-      W,
-      GAP,
-    );
-    expect(out[1]!.x).toBeCloseTo(500);
-    expect(out[0]!.x).toBeCloseTo(500 - (W + GAP));
-    expect(out[2]!.x).toBeCloseTo(500 + (W + GAP));
-  });
-
-  it('preserves along-the-line order', () => {
-    const items = [90, 10, 50, 30].map((x) => ({ lane: 0, x }));
-    const out = resolveMarkerSlots(items, W, GAP);
-    const byDesired = items
-      .map((it, i) => ({ d: it.x, p: out[i]!.x }))
-      .sort((a, b) => a.d - b.d);
-    for (let i = 1; i < byDesired.length; i++) {
-      expect(byDesired[i]!.p).toBeGreaterThan(byDesired[i - 1]!.p);
-    }
-  });
-
-  it('treats lanes independently — a 待避 train never shifts the express', () => {
-    const out = resolveMarkerSlots([{ lane: 0, x: 300 }, { lane: 3, x: 300 }], W, GAP);
-    expect(out.map((r) => r.x)).toEqual([300, 300]);
-  });
-
-  it('always reports the true position alongside the drawn one', () => {
-    const items = [{ lane: 1, x: 10 }, { lane: 1, x: 12 }];
-    const out = resolveMarkerSlots(items, W, GAP);
-    expect(out.map((r) => r.anchorX)).toEqual([10, 12]);
-    expect(out.map((r) => r.lane)).toEqual([1, 1]);
-  });
-
-  it('moves no further than it has to', () => {
-    // A pair 2 px apart needs (W + GAP - 2) of separation, split evenly.
-    const out = resolveMarkerSlots([{ lane: 0, x: 200 }, { lane: 0, x: 202 }], W, GAP);
-    const spread = out[1]!.x - out[0]!.x;
-    expect(spread).toBeCloseTo(W + GAP);
-    expect((out[0]!.x + out[1]!.x) / 2).toBeCloseTo(201);
-  });
-
-  it('handles nothing at all', () => {
-    expect(resolveMarkerSlots([], W, GAP)).toEqual([]);
   });
 });
 

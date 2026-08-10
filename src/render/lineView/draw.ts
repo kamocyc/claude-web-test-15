@@ -25,14 +25,13 @@ import type { DrawContext } from '../canvas/recordingContext';
 import { roundRectPath } from '../canvas/recordingContext';
 import { drawLabel, measuredTextWidth } from '../canvas/textCache';
 import type { RenderTheme } from '../canvas/theme';
-import { contrastText, desaturate, withAlpha } from '../canvas/theme';
+import { desaturate, withAlpha } from '../canvas/theme';
 import {
   depotPlateLayout,
   DEPOT_PLATE_PAD,
   DROPPED,
   LABEL_ROW_PITCH,
   laneCenterY,
-  MarkerSlots,
   placeTrainInto,
   StationLabelPlacer,
   type DepotLane,
@@ -42,22 +41,27 @@ import {
 } from './layout';
 
 /**
- * Train marker box, CSS pixels. Constant under zoom by design.
+ * The train marker is a dot at the train's position, and nothing else.
  *
- * Two text rows: the train label, and the 編成 underneath it. Keeping the
- * formation code *inside* the box rather than floating below it means a
- * cluster of markers cannot interleave its labels with its neighbours', and
- * frees the strip under the box for the true-position tick.
+ * It used to be a 92×26 box, which at any realistic density had to slide along
+ * its lane to avoid its neighbours — so the one thing the view exists to show,
+ * *where the train is*, was the one thing being fudged. Now the dot never
+ * moves and the text is placed separately (see `TRAIN_LABEL_*`).
  */
-export const MARKER_W = 92;
-export const MARKER_H = 26;
-const MARKER_R = 6;
-/** Minimum clear space between two marker boxes on the same lane. */
-export const MARKER_GAP = 5;
-/** A box displaced by less than this is treated as sitting on its train. */
-const SHIFT_EPSILON = 1.5;
+export const TRAIN_DOT_R = 4.5;
+/** Row grid the train labels are packed into, CSS pixels. */
+export const TRAIN_LABEL_PITCH = 13;
+export const TRAIN_LABEL_H = 12;
+const TRAIN_LABEL_PAD = 4;
+/** How far, in rows, a label may sit from its own train before it is dropped. */
+export const TRAIN_LABEL_DRIFT = 3;
+/** Clear space demanded between two labels on the same row. */
+const TRAIN_LABEL_GAP = 4;
+/** Corner radius of the hover / selection ring. */
+const RING_R = 5;
+const TAU = Math.PI * 2;
 
-const LABEL_FONT = 'bold 11px system-ui, sans-serif';
+const TRAIN_LABEL_FONT = 'bold 10px system-ui, sans-serif';
 const SUB_FONT = '9px ui-monospace, monospace';
 const STATION_FONT = 'bold 11px system-ui, sans-serif';
 const STATION_FONT_MINOR = '11px system-ui, sans-serif';
@@ -66,7 +70,7 @@ const DEPOT_FONT = 'bold 10px system-ui, sans-serif';
 
 /** Reusable solver buffers — see the file header. */
 const labelPlacer = new StationLabelPlacer();
-const markerSlots = new MarkerSlots();
+const trainLabelPlacer = new StationLabelPlacer();
 const placeArgs: PlaceTrainArgs = { km: 0, direction: 'down' };
 const placement: TrainPlacement = { x: 0, lane: 0 };
 const NO_FORMATIONS: readonly FormationId[] = [];
@@ -363,12 +367,17 @@ function isDrawn(train: TrainRuntime, showDeadhead: boolean): boolean {
 }
 
 /**
- * Train markers and depot boxes. Redrawn every frame while the clock runs.
+ * Train dots, their labels, and the yards. Redrawn every frame while playing.
  *
- * Two passes over the snapshot: the first places every visible train and hands
- * the positions to `MarkerSlots`, the second draws using the de-overlapped
- * result. The passes use the same predicate and the same order, so slot `k` in
- * the second pass is slot `k` from the first without an index array.
+ * Two passes over the snapshot: the first puts every visible train's label into
+ * the row solver, the second draws. The passes use the same predicate and the
+ * same order, so slot `k` in the second pass is slot `k` from the first without
+ * an index array.
+ *
+ * The dot is drawn from the position and nothing else. Only the label is
+ * negotiable, and when it cannot be placed near its own train it is dropped —
+ * the reader still sees exactly where the train is, and the text comes back as
+ * they zoom in or hover.
  *
  * Pending trains are not drawn at all — a 未出庫 train has no position, and
  * parking them all at the origin would be a lie.
@@ -379,31 +388,81 @@ export function drawLineDynamic(ctx: DrawContext, env: LineDynamicEnv): void {
   ctx.clearRect(0, 0, viewport.width, viewport.height);
   drawDepots(ctx, env);
 
-  markerSlots.reset();
+  const rows = Math.max(1, Math.floor(viewport.height / TRAIN_LABEL_PITCH));
+  trainLabelPlacer.reset(rows, TRAIN_LABEL_GAP, TRAIN_LABEL_DRIFT);
   for (const train of snapshot.trains) {
     if (!isDrawn(train, env.showDeadhead)) continue;
     placementInto(layout, train, placement);
     const sx = worldToScreenX(camera, placement.x);
-    if (sx < -MARKER_W || sx > viewport.width + MARKER_W) continue;
-    markerSlots.push(placement.lane, sx);
+    if (!visible(sx, sx, viewport, 120)) continue;
+    const sy = laneY(env, placement.lane);
+    // The highlighted duty outranks everything else, so emphasising a 運用
+    // cannot cost it the labels of the trains it is made of.
+    const priority =
+      env.highlightDutyId !== undefined && train.dutyId === env.highlightDutyId ? 1 : 0;
+    trainLabelPlacer.push(sx, labelWidth(train), priority, preferredLabelRow(sy));
   }
-  markerSlots.solve(MARKER_W, MARKER_GAP);
+  trainLabelPlacer.solve();
 
   let slot = 0;
   for (const train of snapshot.trains) {
     if (!isDrawn(train, env.showDeadhead)) continue;
     placementInto(layout, train, placement);
     const sx = worldToScreenX(camera, placement.x);
-    if (sx < -MARKER_W || sx > viewport.width + MARKER_W) continue;
-
-    const i = slot++;
-    const boxX = markerSlots.xAt(i);
+    if (!visible(sx, sx, viewport, 120)) continue;
     const sy = laneY(env, placement.lane);
+    const row = trainLabelPlacer.rowAt(slot++);
     const dimmed =
       env.highlightDutyId !== undefined && train.dutyId !== env.highlightDutyId;
-    drawTrainMarker(ctx, env, train, boxX, sx, sy, dimmed);
-    hits?.push(train.trainId, boxX - MARKER_W / 2, sy - MARKER_H / 2, MARKER_W, MARKER_H);
+    drawTrain(ctx, env, train, sx, sy, row, dimmed);
+
+    // One hit rect covering the dot and, when there is one, its label — so the
+    // text is as clickable as the dot it belongs to.
+    const w = row === DROPPED ? TRAIN_DOT_R * 2 + 6 : labelWidth(train);
+    const top = Math.min(sy - TRAIN_DOT_R - 3, labelTop(row));
+    const bottom = Math.max(sy + TRAIN_DOT_R + 3, labelTop(row) + TRAIN_LABEL_H);
+    hits?.push(train.trainId, sx - w / 2, top, w, bottom - top);
   }
+}
+
+/** Row the label would like: immediately under the dot. */
+function preferredLabelRow(sy: number): number {
+  return Math.round((sy + TRAIN_DOT_R + 3) / TRAIN_LABEL_PITCH);
+}
+
+/** Screen y of the top of a label row. `DROPPED` gives a harmless value. */
+function labelTop(row: number): number {
+  return row === DROPPED ? 0 : row * TRAIN_LABEL_PITCH + (TRAIN_LABEL_PITCH - TRAIN_LABEL_H) / 2;
+}
+
+/** '各 4203' and '9004F(5)' side by side, plus the state word if any. */
+function labelWidth(train: TrainRuntime): number {
+  return (
+    measuredTextWidth(labelHead(train), TRAIN_LABEL_FONT) +
+    measuredTextWidth(labelTail(train), SUB_FONT) +
+    TRAIN_LABEL_PAD * 3
+  );
+}
+
+function labelHead(train: TrainRuntime): string {
+  return `${train.direction === 'down' ? '▶' : '◀'}${train.label}`;
+}
+
+function labelTail(train: TrainRuntime): string {
+  const phase = train.phase;
+  const state =
+    phase.phase === 'dwelling' && phase.reason === 'overtakeWait'
+      ? ' 待避'
+      : phase.phase === 'layover'
+        ? ' 折返'
+        : '';
+  const formation =
+    train.formationCode === undefined
+      ? ''
+      : train.cars === undefined
+        ? train.formationCode
+        : `${train.formationCode}(${train.cars})`;
+  return `${formation}${state}`;
 }
 
 /** Where a runtime train sits in world space, written into `out`. */
@@ -464,138 +523,102 @@ export function placementOf(
   return placementInto(layout, train, { x: 0, lane: 0 });
 }
 
-function drawTrainMarker(
+/**
+ * One train: a dot exactly where it is, and its label wherever it fits.
+ *
+ * The dot carries everything that must be legible at a glance without reading
+ * text — colour for the 種別, hollow for a non-revenue move, an amber ring for
+ * 待避中 — and the label carries the words.
+ */
+function drawTrain(
   ctx: DrawContext,
   env: LineDynamicEnv,
   train: TrainRuntime,
   cx: number,
-  anchorX: number,
   cy: number,
+  row: number,
   dimmed: boolean,
 ): void {
   const { theme } = env;
   const type = env.trainTypes.get(train.typeId);
   const baseColor = type?.color ?? theme.accent;
-  const color = dimmed ? withAlpha(desaturate(baseColor, 0.8), 0.35) : baseColor;
-  const x = cx - MARKER_W / 2;
-  const y = cy - MARKER_H / 2;
-
+  const color = dimmed ? withAlpha(desaturate(baseColor, 0.8), 0.4) : baseColor;
   const phase = train.phase;
   const waiting = phase.phase === 'dwelling' && phase.reason === 'overtakeWait';
-  // 折返 is the other state worth calling out: this train has arrived, and
-  // what the reader is looking at is its stock waiting to become the next one.
-  const badge = waiting ? '待避' : phase.phase === 'layover' ? '折返' : undefined;
 
-  // The box has slid along the lane to avoid its neighbours, so say where the
-  // train actually is: a tick at the true km plus a leader back to the box.
-  if (Math.abs(cx - anchorX) > SHIFT_EPSILON) {
-    const tickY = cy + MARKER_H / 2;
-    ctx.strokeStyle = dimmed ? withAlpha(theme.textFaint, 0.5) : withAlpha(baseColor, 0.95);
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    ctx.moveTo(crisp(anchorX), tickY - 3);
-    ctx.lineTo(crisp(anchorX), tickY + 6);
-    ctx.lineTo(crisp(cx), tickY + 6);
-    ctx.stroke();
-  }
-
-  // 待避中 ring FIRST, so the marker sits inside it.
+  // 待避中 ring first, so the dot sits inside it.
   if (waiting && !dimmed) {
     ctx.strokeStyle = theme.waitRing;
-    ctx.lineWidth = 2.5;
-    ctx.setLineDash([]);
-    roundRectPath(ctx, x - 4, y - 4, MARKER_W + 8, MARKER_H + 8, MARKER_R + 3);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = color;
-  roundRectPath(ctx, x, y, MARKER_W, MARKER_H, MARKER_R);
-  ctx.fill();
-
-  // 回送 / 試運転 get a hatched (dashed) border — a non-revenue move should
-  // never be mistaken for a service train.
-  if (train.category !== 'service') {
-    ctx.strokeStyle = dimmed ? withAlpha(theme.hatch, 0.4) : theme.hatch;
     ctx.lineWidth = 2;
-    ctx.setLineDash([4, 3]);
-    roundRectPath(ctx, x + 1, y + 1, MARKER_W - 2, MARKER_H - 2, MARKER_R - 1);
-    ctx.stroke();
     ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, TRAIN_DOT_R + 3, 0, TAU);
+    ctx.stroke();
   }
 
-  // Direction chevron at the leading edge.
-  const dir = train.direction === 'down' ? 1 : -1;
-  const tipX = cx + dir * (MARKER_W / 2 - 6);
-  ctx.fillStyle = withAlpha('#ffffff', dimmed ? 0.35 : 0.85);
-  ctx.beginPath();
-  ctx.moveTo(tipX, cy);
-  ctx.lineTo(tipX - dir * 6, cy - 5);
-  ctx.lineTo(tipX - dir * 6, cy + 5);
-  ctx.closePath();
-  ctx.fill();
-
-  const textColor = dimmed ? withAlpha(theme.text, 0.4) : contrastText(baseColor);
-  const textX = cx - dir * 6;
-  const sub =
-    train.formationCode !== undefined
-      ? train.cars !== undefined
-        ? `${train.formationCode}(${train.cars})`
-        : train.formationCode
-      : undefined;
-
-  if (sub === undefined) {
-    drawLabel(ctx, train.label, textX, cy + 0.5, LABEL_FONT, textColor, {
-      align: 'center',
-      baseline: 'middle',
-      themeKey: theme.key,
-    });
-  } else {
-    drawLabel(ctx, train.label, textX, cy - 1, LABEL_FONT, textColor, {
-      align: 'center',
-      baseline: 'bottom',
-      themeKey: theme.key,
-    });
-    drawLabel(ctx, sub, textX, cy - 1, SUB_FONT, withAlpha(textColor, 0.85), {
-      align: 'center',
-      baseline: 'top',
-      themeKey: theme.key,
-    });
-  }
-
-  if (badge !== undefined && !dimmed) {
-    drawStateBadge(ctx, theme, x - 4, y - 4, badge, waiting);
-  }
-}
-
-/**
- * The 待避 / 折返 badge. Making 緩急接続 obvious is the entire point of this
- * view; making it obvious that a marker is stock rather than a running train
- * is what stops the layover from reading as a train that forgot to leave.
- */
-function drawStateBadge(
-  ctx: DrawContext,
-  theme: RenderTheme,
-  x: number,
-  y: number,
-  text: string,
-  urgent: boolean,
-): void {
-  const w = 26;
-  const h = 12;
-  ctx.fillStyle = urgent ? theme.waitRing : theme.borderStrong;
   ctx.setLineDash([]);
-  roundRectPath(ctx, x, y - h - 1, w, h, 3);
+  ctx.beginPath();
+  ctx.arc(cx, cy, TRAIN_DOT_R, 0, TAU);
+  // A hollow dot is a 回送 / 試運転: an empty move should never be mistaken
+  // for a service train, and hollow says "empty" without needing a legend.
+  if (train.category === 'service') {
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = withAlpha(theme.bg, dimmed ? 0.4 : 0.9);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = theme.bg;
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  if (row === DROPPED) return;
+
+  // -- the label ------------------------------------------------------------
+  const head = labelHead(train);
+  const tail = labelTail(train);
+  const headW = measuredTextWidth(head, TRAIN_LABEL_FONT);
+  const tailW = measuredTextWidth(tail, SUB_FONT);
+  const w = labelWidth(train);
+  const top = labelTop(row);
+  const left = cx - w / 2;
+  const midY = top + TRAIN_LABEL_H / 2;
+
+  // A hairline back to the dot, for the labels that had to sit a row or two
+  // away. Nothing is drawn when the label is already touching its train.
+  const gap = midY - cy;
+  if (Math.abs(gap) > TRAIN_DOT_R + TRAIN_LABEL_H) {
+    ctx.strokeStyle = withAlpha(color, dimmed ? 0.3 : 0.6);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(crisp(cx), cy + Math.sign(gap) * TRAIN_DOT_R);
+    ctx.lineTo(crisp(cx), gap > 0 ? top : top + TRAIN_LABEL_H);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = withAlpha(theme.bg, dimmed ? 0.55 : 0.82);
+  roundRectPath(ctx, left, top, w, TRAIN_LABEL_H, 3);
   ctx.fill();
-  drawLabel(
-    ctx,
-    text,
-    x + w / 2,
-    y - h / 2 - 1,
-    '9px system-ui, sans-serif',
-    urgent ? '#1f1300' : contrastText(theme.borderStrong),
-    { align: 'center', baseline: 'middle', themeKey: theme.key },
-  );
+
+  drawLabel(ctx, head, left + TRAIN_LABEL_PAD, midY, TRAIN_LABEL_FONT, color, {
+    baseline: 'middle',
+    themeKey: theme.key,
+  });
+  if (tailW > 0) {
+    const tailColor = dimmed ? withAlpha(theme.textFaint, 0.5) : theme.textDim;
+    drawLabel(
+      ctx,
+      tail,
+      left + TRAIN_LABEL_PAD * 2 + headW,
+      midY,
+      SUB_FONT,
+      waiting && !dimmed ? theme.waitRing : tailColor,
+      { baseline: 'middle', themeKey: theme.key },
+    );
+  }
 }
 
 /**
@@ -739,7 +762,7 @@ export function drawLineOverlay(ctx: DrawContext, env: LineOverlayEnv): void {
       ctx.strokeStyle = theme.selection;
       ctx.lineWidth = 2.5;
       ctx.setLineDash([]);
-      roundRectPath(ctx, rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6, MARKER_R + 2);
+      roundRectPath(ctx, rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6, RING_R + 2);
       ctx.stroke();
     }
   }
@@ -750,7 +773,7 @@ export function drawLineOverlay(ctx: DrawContext, env: LineOverlayEnv): void {
       ctx.strokeStyle = theme.hover;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([3, 2]);
-      roundRectPath(ctx, rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, MARKER_R + 1);
+      roundRectPath(ctx, rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, RING_R + 1);
       ctx.stroke();
       ctx.setLineDash([]);
     }

@@ -176,18 +176,26 @@ export function useCanvasLayers(): CanvasLayers {
     [contextOf],
   );
 
-  return {
-    containerRef,
-    refs,
-    sizeRef,
-    size,
-    markDirty,
-    markAllDirty,
-    consumeDirty,
-    isDirty,
-    contextOf,
-    clear,
-  };
+  // Memoized, and that matters: this object lands in the dependency array of
+  // every effect a view writes. A fresh literal per render re-runs all of
+  // them, and one of those effects re-fits the camera — so a view that
+  // re-renders for any reason (the 4 Hz shadow, while the clock plays) threw
+  // away whatever the user had panned or zoomed to, about four times a second.
+  return useMemo(
+    () => ({
+      containerRef,
+      refs,
+      sizeRef,
+      size,
+      markDirty,
+      markAllDirty,
+      consumeDirty,
+      isDirty,
+      contextOf,
+      clear,
+    }),
+    [refs, size, markDirty, markAllDirty, consumeDirty, isDirty, contextOf, clear],
+  );
 }
 
 /** Inline styles for the stack — no CSS file, so unit tests import cleanly. */

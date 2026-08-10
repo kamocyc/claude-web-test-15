@@ -195,6 +195,36 @@ test.describe('東急大井町線 sample', () => {
     expect(turnedBack.size, 'no formation turned back in twelve minutes').toBeGreaterThan(0);
   });
 
+  test('a panned, zoomed camera survives the clock moving', async ({ page }) => {
+    // The view re-renders whenever the shadow refreshes, which is four times a
+    // second while the clock runs. That must not be allowed to re-fit the
+    // camera: it used to, so anything the reader panned or zoomed to snapped
+    // back before they could read it.
+    const sim = new Simulator(page);
+    await sim.line.open();
+    await sim.line.seek(T_PEAK);
+
+    // Station positions are a pure function of the camera, so they are the
+    // camera, observed.
+    const stations = async (): Promise<string> =>
+      JSON.stringify((await sim.app.renderDigest('line')).stations);
+    const fitted = await stations();
+
+    const box = (await page.getByTestId(TID.lineView).boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.25, { steps: 8 });
+    await page.mouse.up();
+    await page.mouse.wheel(0, -240);
+    const moved = await stations();
+    expect(moved, 'the drag did not move the camera').not.toBe(fitted);
+
+    await sim.line.seek(T_PEAK + 300);
+    expect(await stations(), 'the camera snapped back').toBe(moved);
+    await sim.line.advance(120);
+    expect(await stations(), 'the camera snapped back').toBe(moved);
+  });
+
   test('playing at speed changes the active set', async ({ page }) => {
     const sim = new Simulator(page);
     await sim.line.open();
