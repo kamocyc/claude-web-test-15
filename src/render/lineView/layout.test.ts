@@ -21,6 +21,7 @@ import {
   resolveStationLabels,
   runningLane,
   stationLabelPriority,
+  stubSide,
   type LabelCandidate,
 } from './layout';
 
@@ -164,22 +165,30 @@ describe('stationLabelPriority / isMajorStop', () => {
 
 describe('computeStationHalfWidth', () => {
   it('scales with the tightest section and stays inside sane limits', () => {
-    // Tightest gap is 400 m -> 60 m.
+    // Tightest gap is 400 m -> 140 m, so the block is 280 m of a 400 m
+    // section and there is still open line between the two stations.
     expect(
       computeStationHalfWidth([
         { kmFromOrigin: 0 },
         { kmFromOrigin: 1000 },
         { kmFromOrigin: 1400 },
       ]),
-    ).toBe(60);
+    ).toBe(140);
+  });
+
+  it('never lets two station blocks meet', () => {
+    for (const gap of [200, 400, 800, 3000, 40_000]) {
+      const half = computeStationHalfWidth([{ kmFromOrigin: 0 }, { kmFromOrigin: gap }]);
+      expect(half * 2, `${gap} m section`).toBeLessThan(gap);
+    }
   });
 
   it('clamps a very long line', () => {
-    expect(computeStationHalfWidth([{ kmFromOrigin: 0 }, { kmFromOrigin: 40_000 }])).toBe(250);
+    expect(computeStationHalfWidth([{ kmFromOrigin: 0 }, { kmFromOrigin: 40_000 }])).toBe(600);
   });
 
   it('falls back for a single station', () => {
-    expect(computeStationHalfWidth([{ kmFromOrigin: 0 }])).toBe(150);
+    expect(computeStationHalfWidth([{ kmFromOrigin: 0 }])).toBe(350);
   });
 });
 
@@ -246,8 +255,9 @@ describe('computeLineLayout', () => {
     // Each road is a lane, and the road is what a train is placed on.
     expect(layout.laneOfTrack.get(TOY.x1)).toBe(yard.tracks[0]!.index);
     expect(layout.totalLaneCount).toBe(yard.laneTo + 1);
-    // The yard runs from its km in to the edge of the attached station block.
-    expect(yard.endX).toBe(kmToMeters(-0.5));
+    // The yard runs from at least its own km in to the edge of the attached
+    // station block.
+    expect(yard.endX).toBeLessThanOrEqual(kmToMeters(-0.5));
     expect(yard.junctionX).toBe(-layout.stationHalfWidth);
     // …and the throat is between the two, so a train has somewhere to turn in.
     expect(yard.rootX).toBeLessThan(yard.junctionX);
@@ -261,6 +271,46 @@ describe('computeLineLayout', () => {
     // The throat fans out above the first road.
     expect(yard.rootLane).toBeLessThan(yard.laneFrom);
     expect(yard.rootLane).toBeGreaterThan(layout.laneUp);
+  });
+
+  it('hangs a 引上線 off the end of the station, not through it', () => {
+    // 溝の口's two are on the 梶が谷 side, which is the far end of the line
+    // from 大井町 — and a tail track at 大井町 would be beyond the buffers.
+    expect(stubSide(kmToMeters(14.5), 0, kmToMeters(16.9))).toBe(1);
+    expect(stubSide(0, 0, kmToMeters(16.9))).toBe(-1);
+
+    // The toy line has no 引上線, so build one at D駅 (the far terminus).
+    const doc = toyProjectCopy();
+    const siding = { ...doc.stationTracks.byId[TOY.d2]!, usage: 'stabling' as const };
+    doc.stationTracks.byId[TOY.d2] = siding;
+    const withSiding = computeLineLayout(doc);
+    const d = withSiding.stationOf.get(TOY.stationD)!;
+    const stub = d.trackLanes.find((l) => l.trackId === TOY.d2)!;
+    const platform = d.trackLanes.find((l) => l.trackId === TOY.d1)!;
+
+    expect(stub.stubSide).toBe(1);
+    expect(platform.stubSide).toBe(0);
+    // It starts inside the station and reaches out past the far end of it…
+    expect(stub.bodyX0).toBeLessThan(d.x1);
+    expect(stub.bodyX1).toBeGreaterThan(d.x1);
+    // …and a train berthed on it is drawn out there, not on the platform.
+    expect(withSiding.berthOfTrack.get(TOY.d2)!).toBeGreaterThan(d.x1);
+    expect(withSiding.berthOfTrack.get(TOY.d1)!).toBe(d.x);
+    // The world grows to hold it.
+    expect(withSiding.bounds.maxX).toBeGreaterThanOrEqual(stub.x1);
+  });
+
+  it('draws a platform long enough to read as one', () => {
+    // A 130 m platform on a 17 km line is half a pixel. The block is sized off
+    // the tightest section instead, and the flat body of each road — the bit
+    // that carries the platform strip — is the majority of it.
+    for (const s of layout.stations) {
+      for (const lane of s.trackLanes) {
+        if (lane.stubSide !== 0) continue;
+        const body = lane.bodyX1 - lane.bodyX0;
+        expect(body, `${s.name} ${lane.label}`).toBeGreaterThan(layout.stationHalfWidth);
+      }
+    }
   });
 
   it('joins a road that is not the running lane to the ones it serves', () => {

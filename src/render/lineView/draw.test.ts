@@ -57,6 +57,9 @@ function platesOf(
     const bottom = Number(calls[i + 4]!.args[1]);
     const left = Number(calls[i + 6]!.args[0]);
     if (Math.abs(bottom - top - h) > 1e-6) continue;
+    // The 種別 bar down a label's leading edge is the same height as the
+    // plate it sits on; only the plate itself is a label box.
+    if (right - left < 20) continue;
     out.push({ x: left, y: top, w: right - left, h: bottom - top });
   }
   return out;

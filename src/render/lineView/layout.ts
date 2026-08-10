@@ -76,11 +76,11 @@ export const DEPOT_GAP_LANES = 0.5;
 /**
  * How much of a station block each turnout lead takes, either end.
  *
- * Slightly over half, so a road that leaves the running lane and comes back
- * has a short flat body in the middle — long enough to carry the road's name
- * and to stand a train on without the marker sitting on a diagonal.
+ * The rest is the flat body of the road, which is the bit that reads as a
+ * platform — so the leads get under half, leaving a body longer than the
+ * pointwork at either end of it.
  */
-export const LEAD_FRACTION = 0.55;
+export const LEAD_FRACTION = 0.42;
 
 /**
  * Lane pitch inside a yard, in main-line lanes per road.
@@ -94,6 +94,21 @@ export const LEAD_FRACTION = 0.55;
  */
 export function depotLanePitch(trackCount: number): number {
   return trackCount <= 4 ? 1 : Math.max(0.3, 4 / trackCount);
+}
+
+/**
+ * Which end of a station a 引上線 hangs off: +1 for the higher-km end.
+ *
+ * A tail track is not a road through the station, it is a stub beyond the
+ * platform, and which end it is beyond is a fact about the place: 溝の口's two
+ * are on the 梶が谷 side, and 大井町 famously has none because there is no room
+ * past the buffers. The document does not record the side, so it is derived
+ * from the one thing that always agrees with it — a stub points at the end of
+ * the line the station is nearest, which is exactly right at a terminal (where
+ * tail tracks live) and is the best available guess anywhere else.
+ */
+export function stubSide(km: Meters, lineFromKm: Meters, lineToKm: Meters): 1 | -1 {
+  return km - lineFromKm >= lineToKm - km ? 1 : -1;
 }
 
 export interface LaneCommon {
@@ -118,6 +133,13 @@ export interface StationTrackLane extends LaneCommon {
   bodyX1: Meters;
   /** Running lanes this road is connected to. Empty when it is one of them. */
   leadLanes: number[];
+  /**
+   * +1 / -1 when this road is a stub off that end of the station, 0 when it
+   * runs through. See `stubSide`.
+   */
+  stubSide: number;
+  /** Where a train standing on this road is drawn. */
+  berthX: Meters;
 }
 
 export interface SectionLane extends LaneCommon {
@@ -216,6 +238,8 @@ export interface LineLayout {
   stations: StationLayout[];
   stationOf: Map<StationId, StationLayout>;
   laneOfTrack: Map<StationTrackId, number>;
+  /** Where a train standing on a given road is drawn — not always its station. */
+  berthOfTrack: Map<StationTrackId, Meters>;
   depots: DepotLane[];
   depotLaneOfStation: Map<StationId, DepotLane>;
   /** Half the world width of a station block. */
@@ -334,6 +358,14 @@ export function assignStationLanes(
 /**
  * How wide a station block is, given the tightest section on the line.
  *
+ * The block is the drawn platform: the roads inside it carry the platform
+ * strip, and the leads at either end are what a train uses to get onto them.
+ * It is sized off the tightest 駅間 rather than off a real 有効長, because a
+ * 130 m platform on a 17 km line is half a pixel — the block has to be long
+ * enough to *read* as a platform, and short enough that two adjacent ones do
+ * not meet. Just over a third of the tightest section satisfies both, and
+ * leaves a clear run of open line between every pair of stations.
+ *
  * Takes only the km field so it can be exercised directly with a list of
  * distances rather than a set of fully-built stations.
  */
@@ -349,7 +381,7 @@ export function computeStationHalfWidth(
     if (gap > 0 && gap < minGap) minGap = gap;
   }
   if (!Number.isFinite(minGap)) minGap = 1000;
-  return Math.max(25, Math.min(250, Math.round(minGap * 0.15)));
+  return Math.max(60, Math.min(600, Math.round(minGap * 0.35)));
 }
 
 /**
@@ -362,7 +394,7 @@ export function computeStationHalfWidth(
  * the drawn stub is capped.
  */
 export function depotStubCap(lineSpan: Meters, halfWidth: Meters): Meters {
-  return Math.max(halfWidth * 6, lineSpan * 0.16, 200);
+  return Math.max(lineSpan * 0.16, halfWidth * 2, 200);
 }
 
 /**
@@ -385,7 +417,7 @@ export function depotStubReach(
   halfWidth: Meters,
 ): Meters {
   const cap = depotStubCap(lineSpan, halfWidth);
-  const floor = Math.min(cap, Math.max(halfWidth * 3, lineSpan * 0.14));
+  const floor = Math.min(cap, Math.max(halfWidth * 1.5, lineSpan * 0.14));
   return Math.min(Math.max(trueReach, floor), cap);
 }
 
@@ -458,6 +490,14 @@ export function computeLineLayout(
   const counts = stopCounts(doc);
 
   // -- station blocks -------------------------------------------------------
+  const firstKm = ordered[0]?.kmFromOrigin ?? 0;
+  const lastKm = ordered[ordered.length - 1]?.kmFromOrigin ?? 0;
+  /** How far a 引上線 reaches past the end of the platform it serves. */
+  const stubLength = halfWidth * 1.1;
+  const berthOfTrack = new Map<StationTrackId, Meters>();
+  let stubMinX = Infinity;
+  let stubMaxX = -Infinity;
+
   for (const station of ordered) {
     const tracks = tracksOfStation(doc, station.id);
     const assignment = assignStationLanes(tracks, mainLaneCount);
@@ -476,14 +516,21 @@ export function computeLineLayout(
         if (running !== index && !leadLanes.includes(running)) leadLanes.push(running);
       }
       const inset = leadLanes.length > 0 ? leadWidth : 0;
+      // A 引上線 is not a road through the station, it is a stub off the end
+      // of it — so it is drawn off the end, on the side `stubSide` picks.
+      const stub = t.usage === 'stabling' ? stubSide(station.kmFromOrigin, firstKm, lastKm) : 0;
+      const connectX = stub > 0 ? x1 - leadWidth : x0 + leadWidth;
+      const tipX = connectX + stub * (leadWidth + stubLength);
       const lane: StationTrackLane = {
         kind: 'stationTrack',
         index,
-        x0,
-        x1,
-        bodyX0: x0 + inset,
-        bodyX1: x1 - inset,
+        x0: stub === 0 ? x0 : Math.min(connectX - stub * leadWidth, tipX),
+        x1: stub === 0 ? x1 : Math.max(connectX - stub * leadWidth, tipX),
+        bodyX0: stub === 0 ? x0 + inset : Math.min(connectX, tipX),
+        bodyX1: stub === 0 ? x1 - inset : Math.max(connectX, tipX),
         leadLanes,
+        stubSide: stub,
+        berthX: stub === 0 ? station.kmFromOrigin : connectX + stub * (leadWidth + stubLength) / 2,
         label: t.name,
         stationId: station.id,
         trackId: t.id,
@@ -492,8 +539,11 @@ export function computeLineLayout(
         usage: t.usage,
         directions: t.directions,
       };
+      berthOfTrack.set(t.id, lane.berthX);
       trackLanes.push(lane);
       lanes.push(lane);
+      stubMinX = Math.min(stubMinX, lane.x0);
+      stubMaxX = Math.max(stubMaxX, lane.x1);
     }
     trackLanes.sort((a, b) => a.index - b.index);
 
@@ -580,6 +630,10 @@ export function computeLineLayout(
     minX = 0;
     maxX = 1000;
   }
+  // A tail track reaches past its station, and at a terminal that is past the
+  // end of the line.
+  if (Number.isFinite(stubMinX)) minX = Math.min(minX, stubMinX);
+  if (Number.isFinite(stubMaxX)) maxX = Math.max(maxX, stubMaxX);
   const lineSpan = maxX - minX;
 
   // -- yards ----------------------------------------------------------------
@@ -613,9 +667,11 @@ export function computeLineLayout(
     const laneFrom = nextFreeLane + DEPOT_GAP_LANES;
     const rootLane = laneFrom - DEPOT_GAP_LANES / 2;
 
+    const berthX = (throatX + endX) / 2;
     const trackLanes: DepotTrackLane[] = tracks.map((t, i) => {
       const index = laneFrom + i * pitch;
       laneOfTrack.set(t.id, index);
+      berthOfTrack.set(t.id, berthX);
       return {
         kind: 'depotTrack',
         index,
@@ -643,7 +699,7 @@ export function computeLineLayout(
       rootLane,
       throatX,
       endX,
-      berthX: (throatX + endX) / 2,
+      berthX,
       x0: Math.min(endX, junctionX),
       x1: Math.max(endX, junctionX),
       tracks: trackLanes,
@@ -672,6 +728,7 @@ export function computeLineLayout(
     stations,
     stationOf,
     laneOfTrack,
+    berthOfTrack,
     depots,
     depotLaneOfStation,
     stationHalfWidth: halfWidth,
@@ -788,12 +845,23 @@ function standingLane(
   return runningLane(layout, direction);
 }
 
-/** Drawn x of a train standing at a station, which is not always its km. */
+/**
+ * Drawn x of a train standing on a road, which is not always its station's.
+ *
+ * A 引上線 is off the end of the platform and a yard road is off the line
+ * altogether; a formation berthed on either has to be drawn where that road
+ * actually is, or the marker sits on a rail it is not standing on.
+ */
 function standingX(
   layout: LineLayout,
   stationId: StationId | undefined,
+  trackId: StationTrackId | undefined,
   fallbackKm: Meters,
 ): Meters {
+  if (trackId !== undefined) {
+    const berth = layout.berthOfTrack.get(trackId);
+    if (berth !== undefined) return berth;
+  }
   if (stationId === undefined) return fallbackKm;
   const yard = layout.depotLaneOfStation.get(stationId);
   if (yard !== undefined) return yard.berthX;
@@ -830,7 +898,7 @@ function resolveEnd(
 
   const station = stationId === undefined ? undefined : layout.stationOf.get(stationId);
   const lane = standingLane(layout, stationId, trackId, direction);
-  out.x = station?.x ?? fallbackKm;
+  out.x = standingX(layout, stationId, trackId, fallbackKm);
   out.km = station?.km ?? fallbackKm;
   out.off[0] = 0;
   out.lane[0] = lane;
@@ -878,16 +946,20 @@ export function placeTrainInto(
     return placeOnLeg(layout, args, out);
   }
 
-  out.x = standingX(layout, stationId, km);
+  out.x = standingX(layout, stationId, trackId, km);
   out.lane = standingLane(layout, stationId, trackId, direction);
 
   // Mid-shunt: crossing from one road to another without leaving the station.
+  // Both axes move, because a shunt into a 引上線 travels along the line as
+  // well as across it.
   const blend = args.trackBlend;
   if (blend !== undefined && args.fromTrackId !== undefined) {
-    const from = layout.laneOfTrack.get(args.fromTrackId);
-    if (from !== undefined) {
+    const fromLane = layout.laneOfTrack.get(args.fromTrackId);
+    if (fromLane !== undefined) {
       const f = blend < 0 ? 0 : blend > 1 ? 1 : blend;
-      out.lane = from + (out.lane - from) * f;
+      out.lane = fromLane + (out.lane - fromLane) * f;
+      const fromX = standingX(layout, stationId, args.fromTrackId, km);
+      out.x = fromX + (out.x - fromX) * f;
     }
   }
   return out;
@@ -1161,7 +1233,7 @@ export function resolveStationLabels(
 // Depot name plate
 // ---------------------------------------------------------------------------
 
-export const DEPOT_PLATE_H = 15;
+export const DEPOT_PLATE_H = 14;
 export const DEPOT_PLATE_PAD = 6;
 
 export interface DepotPlate {
