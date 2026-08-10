@@ -50,9 +50,11 @@ import {
  */
 export const TRAIN_DOT_R = 4.5;
 /** Row grid the train labels are packed into, CSS pixels. */
-export const TRAIN_LABEL_PITCH = 13;
-export const TRAIN_LABEL_H = 12;
-const TRAIN_LABEL_PAD = 4;
+export const TRAIN_LABEL_PITCH = 16;
+export const TRAIN_LABEL_H = 15;
+const TRAIN_LABEL_PAD = 5;
+/** Width of the 種別-coloured bar down the leading edge of a label. */
+const TRAIN_LABEL_BAR = 3;
 /** How far, in rows, a label may sit from its own train before it is dropped. */
 export const TRAIN_LABEL_DRIFT = 3;
 /** Clear space demanded between two labels on the same row. */
@@ -61,7 +63,16 @@ const TRAIN_LABEL_GAP = 4;
 const RING_R = 5;
 const TAU = Math.PI * 2;
 
-const TRAIN_LABEL_FONT = 'bold 10px system-ui, sans-serif';
+/**
+ * Train labels are set in the same face and size as a 急行停車駅 name, in the
+ * same colour, for the same reason: this is the text a reader is here to read.
+ * The 種別 colour that used to tint it could not survive the contrast — a red
+ * that reads against a dark ground is a pink — so it moved to the dot and to
+ * the bar down the label's leading edge, where being a colour is all it has
+ * to do.
+ */
+const TRAIN_LABEL_FONT = 'bold 11px system-ui, sans-serif';
+const TRAIN_SUB_FONT = '11px ui-monospace, monospace';
 const SUB_FONT = '9px ui-monospace, monospace';
 const STATION_FONT = 'bold 11px system-ui, sans-serif';
 const STATION_FONT_MINOR = '11px system-ui, sans-serif';
@@ -190,6 +201,8 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
       const y = crisp(laneY(env, lane.index));
       const bx0 = worldToScreenX(camera, lane.bodyX0);
       const bx1 = worldToScreenX(camera, lane.bodyX1);
+      const lx0 = worldToScreenX(camera, lane.x0);
+      const lx1 = worldToScreenX(camera, lane.x1);
 
       // 待避線 gets its own tint: spotting the passing loop must not require
       // reading the track name.
@@ -205,18 +218,34 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
 
       // The leads into the running lanes this road serves. Without them a
       // 待避線 is a segment floating beside the railway with no way on or off,
-      // and the train that swings into it has nothing to swing along.
+      // and the train that swings into it has nothing to swing along. A 引上線
+      // gets exactly one, at the end it is connected to.
       if (lane.leadLanes.length > 0) {
         ctx.strokeStyle = theme.railDim;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         for (const running of lane.leadLanes) {
           const ry = crisp(laneY(env, running));
-          ctx.moveTo(sx0, ry);
-          ctx.lineTo(bx0, y);
-          ctx.moveTo(bx1, y);
-          ctx.lineTo(sx1, ry);
+          if (lane.stubSide >= 0) {
+            ctx.moveTo(lx0, ry);
+            ctx.lineTo(bx0, y);
+          }
+          if (lane.stubSide <= 0) {
+            ctx.moveTo(bx1, y);
+            ctx.lineTo(lx1, ry);
+          }
         }
+        ctx.stroke();
+      }
+
+      // Buffer stop at the dead end, so a stub reads as a stub.
+      if (lane.stubSide !== 0) {
+        const tip = crisp(lane.stubSide > 0 ? bx1 : bx0);
+        ctx.strokeStyle = theme.railDim;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(tip, y - 5);
+        ctx.lineTo(tip, y + 5);
         ctx.stroke();
       }
 
@@ -400,7 +429,8 @@ export function drawLineDynamic(ctx: DrawContext, env: LineDynamicEnv): void {
     // cannot cost it the labels of the trains it is made of.
     const priority =
       env.highlightDutyId !== undefined && train.dutyId === env.highlightDutyId ? 1 : 0;
-    trainLabelPlacer.push(sx, labelWidth(train), priority, preferredLabelRow(sy));
+    const w = labelWidth(train);
+    trainLabelPlacer.push(labelCentre(sx, w, viewport), w, priority, preferredLabelRow(sy));
   }
   trainLabelPlacer.solve();
 
@@ -419,10 +449,26 @@ export function drawLineDynamic(ctx: DrawContext, env: LineDynamicEnv): void {
     // One hit rect covering the dot and, when there is one, its label — so the
     // text is as clickable as the dot it belongs to.
     const w = row === DROPPED ? TRAIN_DOT_R * 2 + 6 : labelWidth(train);
+    const cx = row === DROPPED ? sx : labelCentre(sx, w, viewport);
     const top = Math.min(sy - TRAIN_DOT_R - 3, labelTop(row));
     const bottom = Math.max(sy + TRAIN_DOT_R + 3, labelTop(row) + TRAIN_LABEL_H);
-    hits?.push(train.trainId, sx - w / 2, top, w, bottom - top);
+    hits?.push(train.trainId, Math.min(cx, sx) - w / 2, top, w + Math.abs(cx - sx), bottom - top);
   }
+}
+
+/**
+ * Where a label sits along the line: on its train, unless that would push it
+ * off the edge of the canvas.
+ *
+ * The dot is never nudged — but a label half off-screen is a label nobody can
+ * read, and this is the only case where the text is allowed to sit beside its
+ * train rather than under it. Clamping happens before the row solver sees the
+ * interval, so the no-overlap guarantee survives it.
+ */
+function labelCentre(sx: number, w: number, viewport: Viewport): number {
+  const half = w / 2;
+  if (viewport.width < w + 8) return sx;
+  return Math.max(half + 3, Math.min(viewport.width - half - 3, sx));
 }
 
 /** Row the label would like: immediately under the dot. */
@@ -438,8 +484,9 @@ function labelTop(row: number): number {
 /** '各 4203' and '9004F(5)' side by side, plus the state word if any. */
 function labelWidth(train: TrainRuntime): number {
   return (
+    TRAIN_LABEL_BAR +
     measuredTextWidth(labelHead(train), TRAIN_LABEL_FONT) +
-    measuredTextWidth(labelTail(train), SUB_FONT) +
+    measuredTextWidth(labelTail(train), TRAIN_SUB_FONT) +
     TRAIN_LABEL_PAD * 3
   );
 }
@@ -581,43 +628,47 @@ function drawTrain(
   const head = labelHead(train);
   const tail = labelTail(train);
   const headW = measuredTextWidth(head, TRAIN_LABEL_FONT);
-  const tailW = measuredTextWidth(tail, SUB_FONT);
+  const tailW = measuredTextWidth(tail, TRAIN_SUB_FONT);
   const w = labelWidth(train);
   const top = labelTop(row);
-  const left = cx - w / 2;
+  const left = labelCentre(cx, w, env.viewport) - w / 2;
   const midY = top + TRAIN_LABEL_H / 2;
 
   // A hairline back to the dot, for the labels that had to sit a row or two
   // away. Nothing is drawn when the label is already touching its train.
   const gap = midY - cy;
-  if (Math.abs(gap) > TRAIN_DOT_R + TRAIN_LABEL_H) {
+  const anchorX = Math.max(left + 2, Math.min(left + w - 2, cx));
+  if (Math.abs(gap) > TRAIN_DOT_R + TRAIN_LABEL_H || Math.abs(anchorX - cx) > 1) {
     ctx.strokeStyle = withAlpha(color, dimmed ? 0.3 : 0.6);
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(crisp(cx), cy + Math.sign(gap) * TRAIN_DOT_R);
-    ctx.lineTo(crisp(cx), gap > 0 ? top : top + TRAIN_LABEL_H);
+    ctx.moveTo(crisp(cx), cy + Math.sign(gap || 1) * TRAIN_DOT_R);
+    ctx.lineTo(crisp(anchorX), gap > 0 ? top : top + TRAIN_LABEL_H);
     ctx.stroke();
   }
 
-  ctx.fillStyle = withAlpha(theme.bg, dimmed ? 0.55 : 0.82);
+  // Nearly opaque, because the contrast of the text on it is the point and a
+  // rail showing through would eat into it.
+  ctx.fillStyle = withAlpha(theme.bg, dimmed ? 0.7 : 0.95);
   roundRectPath(ctx, left, top, w, TRAIN_LABEL_H, 3);
   ctx.fill();
 
-  drawLabel(ctx, head, left + TRAIN_LABEL_PAD, midY, TRAIN_LABEL_FONT, color, {
+  // The 種別 colour, as a bar rather than as ink.
+  ctx.fillStyle = color;
+  roundRectPath(ctx, left, top, TRAIN_LABEL_BAR, TRAIN_LABEL_H, 1.5);
+  ctx.fill();
+
+  const textColor = dimmed ? withAlpha(theme.text, 0.45) : theme.text;
+  const textLeft = left + TRAIN_LABEL_BAR + TRAIN_LABEL_PAD;
+  drawLabel(ctx, head, textLeft, midY, TRAIN_LABEL_FONT, textColor, {
     baseline: 'middle',
     themeKey: theme.key,
   });
   if (tailW > 0) {
-    const tailColor = dimmed ? withAlpha(theme.textFaint, 0.5) : theme.textDim;
-    drawLabel(
-      ctx,
-      tail,
-      left + TRAIN_LABEL_PAD * 2 + headW,
-      midY,
-      SUB_FONT,
-      waiting && !dimmed ? theme.waitRing : tailColor,
-      { baseline: 'middle', themeKey: theme.key },
-    );
+    drawLabel(ctx, tail, textLeft + headW + TRAIN_LABEL_PAD, midY, TRAIN_SUB_FONT, textColor, {
+      baseline: 'middle',
+      themeKey: theme.key,
+    });
   }
 }
 
