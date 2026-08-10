@@ -11,7 +11,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TID } from '@e2e/testids';
 import { TOY } from '@/testing/toyProject';
-import { sampleScene, sampleSceneWithYardConflict } from './__fixtures__/sampleScene';
+import {
+  sampleScene,
+  sampleSceneWithShunt,
+  sampleSceneWithYardConflict,
+} from './__fixtures__/sampleScene';
 import { resetFrameTasks } from './canvas/rafLoop';
 import { LineViewCanvas } from './lineView/LineViewCanvas';
 import { setRenderSceneSource, staticSceneSource, type RenderScene } from './scene';
@@ -181,6 +185,39 @@ describe('StationYardChart', () => {
       { kind: 'train', trainId: TOY.localDown, stopIndex: 2 },
       false,
     );
+  });
+
+  it('draws the bars flat — no outline, no rounded corners', () => {
+    mount(<StationYardChart stationId={TOY.stationC} />, sampleSceneWithYardConflict());
+    for (const bar of screen.getAllByTestId(TID.yardBar(TOY.localDown))) {
+      for (const rect of bar.querySelectorAll('rect')) {
+        expect(rect.getAttribute('rx')).toBeNull();
+        expect(rect.getAttribute('stroke')).toBeNull();
+      }
+    }
+  });
+
+  it('draws an 入換 line between the two roads one duty used', () => {
+    mount(<StationYardChart stationId={TOY.stationD} />, sampleSceneWithShunt());
+    const shunts = screen.getAllByTestId(TID.yardShunt);
+    expect(shunts).toHaveLength(1);
+    expect(shunts[0]!.getAttribute('data-from-track')).toBe(TOY.d1);
+    expect(shunts[0]!.getAttribute('data-to-track')).toBe(TOY.d2);
+    expect(shunts[0]!.getAttribute('data-duty-id')).toBe(TOY.dutyLocal);
+  });
+
+  it('zooms the time axis and comes back to the whole day', () => {
+    mount(<StationYardChart stationId={TOY.stationC} />);
+    const host = screen.getByTestId(TID.yardChart);
+    const window0 = screen.getByTestId(TID.yardWindow).textContent;
+
+    fireEvent.click(screen.getByTestId(TID.yardZoomIn));
+    expect(host.getAttribute('data-zoomed')).toBe('1');
+    expect(screen.getByTestId(TID.yardWindow).textContent).not.toBe(window0);
+
+    fireEvent.click(screen.getByTestId(TID.yardZoomReset));
+    expect(host.getAttribute('data-zoomed')).toBe('0');
+    expect(screen.getByTestId(TID.yardWindow).textContent).toBe(window0);
   });
 });
 

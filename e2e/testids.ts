@@ -180,6 +180,13 @@ export const TID = {
   yardLane: (trackId: string) => `yard-lane-${trackId}`,
   yardBar: (trainId: string) => `yard-bar-${trainId}`,
   yardConflict: 'yard-conflict',
+  /** 入換 — one formation moving between two roads of the same station. */
+  yardShunt: 'yard-shunt',
+  yardZoomIn: 'yard-zoom-in',
+  yardZoomOut: 'yard-zoom-out',
+  yardZoomReset: 'yard-zoom-reset',
+  yardWindow: 'yard-window',
+  yardShuntHint: 'yard-shunt-hint',
 
   // inspector --------------------------------------------------------------
   inspector: 'inspector',

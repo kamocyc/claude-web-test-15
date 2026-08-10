@@ -84,6 +84,39 @@ export function sampleSceneWithYardConflict(t: Sec = FIXTURE_T): RenderScene {
   return { ...scene, index, generation: scene.generation + 1 };
 }
 
+/**
+ * A variant where 運用 01 is moved across D駅 — arrival on 1番線, then standing
+ * on 2番線 — so the yard chart has an 入換 to draw.
+ */
+export function sampleSceneWithShunt(t: Sec = FIXTURE_T): RenderScene {
+  const scene = sampleScene(t);
+  const trackIntervals = new Map(scene.index.trackIntervals);
+  trackIntervals.set(TOY.d1, [
+    {
+      trackId: TOY.d1,
+      stationId: TOY.stationD,
+      trainId: TOY.localDown,
+      from: 8 * H + 10 * M,
+      to: 8 * H + 12 * M,
+      bookedFrom: 8 * H + 10 * M + 30,
+      bookedTo: 8 * H + 11 * M + 30,
+    },
+  ]);
+  trackIntervals.set(TOY.d2, [
+    {
+      trackId: TOY.d2,
+      stationId: TOY.stationD,
+      trainId: TOY.depotIn,
+      from: 8 * H + 12 * M,
+      to: 8 * H + 20 * M,
+      bookedFrom: 8 * H + 12 * M + 30,
+      bookedTo: 8 * H + 19 * M,
+    },
+  ]);
+  const index: TimetableIndex = { ...scene.index, trackIntervals };
+  return { ...scene, index, generation: scene.generation + 1 };
+}
+
 /** Drop the memoized document — for tests that mutate it. */
 export function resetSampleScene(): void {
   cachedDoc = undefined;
