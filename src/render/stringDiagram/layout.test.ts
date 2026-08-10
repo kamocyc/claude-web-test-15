@@ -96,6 +96,13 @@ describe('computeDiagramLayout — polylines', () => {
     expect(only.trains.map((t) => t.trainId)).toEqual([TOY.localDown, TOY.expressDown]);
   });
 
+  it('drops a 待避 marker whose passing train is not drawn', () => {
+    // The 回送 is not part of the overtake pair, so hiding it must not cost
+    // the sheet its markers.
+    const only = computeDiagramLayout(sampleIndex(), { showDeadhead: false });
+    expect(only.overtakes).toHaveLength(1);
+  });
+
   it('builds a spatial index covering every segment', () => {
     const segmentCount = layout.trains.reduce((n, t) => n + t.points.length - 1, 0);
     expect(layout.segments.size).toBe(segmentCount);
@@ -114,6 +121,48 @@ describe('computeDiagramLayout — polylines', () => {
         expect(p.y).toBeLessThanOrEqual(layout.bounds.maxY);
       }
     }
+  });
+});
+
+describe('computeDiagramLayout — one direction at a time', () => {
+  it('defaults to drawing both directions', () => {
+    const layout = computeDiagramLayout(sampleIndex());
+    expect(layout.direction).toBe('both');
+    expect(layout.trains.map((t) => t.direction)).toContain('up');
+    expect(layout.trains.map((t) => t.direction)).toContain('down');
+  });
+
+  it('keeps only 下り when asked for it', () => {
+    const layout = computeDiagramLayout(sampleIndex(), { direction: 'down' });
+    expect(layout.trains.map((t) => t.trainId)).toEqual([
+      TOY.depotOut,
+      TOY.localDown,
+      TOY.expressDown,
+    ]);
+    expect(layout.trainById.has(TOY.depotIn)).toBe(false);
+  });
+
+  it('keeps only 上り when asked for it', () => {
+    const layout = computeDiagramLayout(sampleIndex(), { direction: 'up' });
+    expect(layout.trains.map((t) => t.trainId)).toEqual([TOY.depotIn]);
+  });
+
+  it('drops the 待避 and 接続 markers of trains it filtered away', () => {
+    // Both events pair two 下り trains, so an 上り-only sheet has neither.
+    const up = computeDiagramLayout(sampleIndex(), { direction: 'up' });
+    expect(up.overtakes).toHaveLength(0);
+    expect(up.connections).toHaveLength(0);
+
+    const down = computeDiagramLayout(sampleIndex(), { direction: 'down' });
+    expect(down.overtakes).toHaveLength(1);
+    expect(down.connections).toHaveLength(1);
+  });
+
+  it('still spans the service day when a direction has no trains at all', () => {
+    const layout = computeDiagramLayout(sampleIndex(), { direction: 'up', showDeadhead: false });
+    expect(layout.trains).toHaveLength(0);
+    expect(layout.bounds.maxX).toBeGreaterThan(layout.bounds.minX);
+    expect(layout.bounds.maxY).toBeGreaterThan(layout.bounds.minY);
   });
 });
 

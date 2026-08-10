@@ -111,6 +111,11 @@ export function stubSide(km: Meters, lineFromKm: Meters, lineToKm: Meters): 1 | 
   return km - lineFromKm >= lineToKm - km ? 1 : -1;
 }
 
+/** A road that dead-ends off the end of a station rather than running through. */
+export function isStubTrack(track: Pick<StationTrack, 'usage'>): boolean {
+  return track.usage === 'stabling';
+}
+
 export interface LaneCommon {
   index: number;
   /** World x range this lane occupies. */
@@ -240,6 +245,12 @@ export interface LineLayout {
   laneOfTrack: Map<StationTrackId, number>;
   /** Where a train standing on a given road is drawn — not always its station. */
   berthOfTrack: Map<StationTrackId, Meters>;
+  /**
+   * The drawn road of a 番線: its flat body, and the end it joins the running
+   * line at. `placeTrain` walks this so a train follows the track it is on
+   * rather than a straight line between two berths.
+   */
+  roadOfTrack: Map<StationTrackId, StationTrackLane>;
   depots: DepotLane[];
   depotLaneOfStation: Map<StationId, DepotLane>;
   /** Half the world width of a station block. */
@@ -477,9 +488,29 @@ export function computeLineLayout(
   const halfWidth = opts.stationHalfWidth ?? computeStationHalfWidth(ordered);
   const leadWidth = halfWidth * LEAD_FRACTION;
 
-  let maxTracks = 0;
-  for (const s of ordered) maxTracks = Math.max(maxTracks, s.trackIds.length);
-  const mainLaneCount = Math.max(2, maxTracks);
+  /**
+   * 引上線 are sized separately from the roads that run through a station.
+   *
+   * Counting them together made the stack as deep as 溝の口 has roads — six —
+   * which handed the two 引上線 the lanes at the edges of the stack. One of
+   * those edges *is* the up running lane, so the tail track was drawn along
+   * the main line and every up train appeared to run down a stub. A stub gets
+   * an inner lane instead, and the stack only has to be deep enough to hold
+   * the through roads plus a clear running lane either side of the stubs.
+   */
+  let maxThrough = 0;
+  let maxStubs = 0;
+  for (const s of ordered) {
+    let through = 0;
+    let stubs = 0;
+    for (const t of tracksOfStation(doc, s.id)) {
+      if (isStubTrack(t)) stubs += 1;
+      else through += 1;
+    }
+    maxThrough = Math.max(maxThrough, through);
+    maxStubs = Math.max(maxStubs, stubs);
+  }
+  const mainLaneCount = Math.max(2, maxThrough, maxStubs + 2);
   const laneDown = 0;
   const laneUp = mainLaneCount - 1;
 
@@ -487,6 +518,7 @@ export function computeLineLayout(
   const stations: StationLayout[] = [];
   const stationOf = new Map<StationId, StationLayout>();
   const laneOfTrack = new Map<StationTrackId, number>();
+  const roadOfTrack = new Map<StationTrackId, StationTrackLane>();
   const counts = stopCounts(doc);
 
   // -- station blocks -------------------------------------------------------
@@ -500,7 +532,16 @@ export function computeLineLayout(
 
   for (const station of ordered) {
     const tracks = tracksOfStation(doc, station.id);
-    const assignment = assignStationLanes(tracks, mainLaneCount);
+    const through = tracks.filter((t) => !isStubTrack(t));
+    const stubs = tracks.filter((t) => isStubTrack(t));
+    const assignment = assignStationLanes(through, mainLaneCount);
+    // Stubs take inner lanes, in authored order, centred on the stack: a 引上線
+    // is the continuation of a platform road past the buffer end, so it belongs
+    // beside those roads and never on top of a running lane.
+    const stubLaneFrom = Math.max(1, Math.floor((mainLaneCount - stubs.length) / 2));
+    stubs.forEach((t, i) => {
+      assignment.set(t.id, Math.min(stubLaneFrom + i, Math.max(1, mainLaneCount - 2)));
+    });
     const x0 = station.kmFromOrigin - halfWidth;
     const x1 = station.kmFromOrigin + halfWidth;
 
@@ -518,19 +559,26 @@ export function computeLineLayout(
       const inset = leadLanes.length > 0 ? leadWidth : 0;
       // A 引上線 is not a road through the station, it is a stub off the end
       // of it — so it is drawn off the end, on the side `stubSide` picks.
-      const stub = t.usage === 'stabling' ? stubSide(station.kmFromOrigin, firstKm, lastKm) : 0;
-      const connectX = stub > 0 ? x1 - leadWidth : x0 + leadWidth;
-      const tipX = connectX + stub * (leadWidth + stubLength);
+      //
+      // It leaves the running line at the **edge of the station block**, which
+      // is where every other road at this station joins it. That is what lets
+      // a shunt out of a platform and into the tail track be drawn as one
+      // continuous move along drawn track: out along the platform road, over
+      // the throat, and back out on the stub.
+      const stub = isStubTrack(t) ? stubSide(station.kmFromOrigin, firstKm, lastKm) : 0;
+      const throatX = stub > 0 ? x1 : x0;
+      const stubBodyX = throatX + stub * leadWidth;
+      const tipX = stubBodyX + stub * stubLength;
       const lane: StationTrackLane = {
         kind: 'stationTrack',
         index,
-        x0: stub === 0 ? x0 : Math.min(connectX - stub * leadWidth, tipX),
-        x1: stub === 0 ? x1 : Math.max(connectX - stub * leadWidth, tipX),
-        bodyX0: stub === 0 ? x0 + inset : Math.min(connectX, tipX),
-        bodyX1: stub === 0 ? x1 - inset : Math.max(connectX, tipX),
+        x0: stub === 0 ? x0 : Math.min(throatX, tipX),
+        x1: stub === 0 ? x1 : Math.max(throatX, tipX),
+        bodyX0: stub === 0 ? x0 + inset : Math.min(stubBodyX, tipX),
+        bodyX1: stub === 0 ? x1 - inset : Math.max(stubBodyX, tipX),
         leadLanes,
         stubSide: stub,
-        berthX: stub === 0 ? station.kmFromOrigin : connectX + stub * (leadWidth + stubLength) / 2,
+        berthX: stub === 0 ? station.kmFromOrigin : (stubBodyX + tipX) / 2,
         label: t.name,
         stationId: station.id,
         trackId: t.id,
@@ -540,6 +588,7 @@ export function computeLineLayout(
         directions: t.directions,
       };
       berthOfTrack.set(t.id, lane.berthX);
+      roadOfTrack.set(t.id, lane);
       trackLanes.push(lane);
       lanes.push(lane);
       stubMinX = Math.min(stubMinX, lane.x0);
@@ -729,6 +778,7 @@ export function computeLineLayout(
     stationOf,
     laneOfTrack,
     berthOfTrack,
+    roadOfTrack,
     depots,
     depotLaneOfStation,
     stationHalfWidth: halfWidth,
@@ -868,8 +918,13 @@ function standingX(
   return layout.stationOf.get(stationId)?.x ?? fallbackKm;
 }
 
-/** Fill `out` with the geometry of one end of a leg. */
-function resolveEnd(
+/**
+ * Where one end of a leg sits: the anchor only, with no wiring yet.
+ *
+ * Split from the wiring because the wiring depends on which way the leg goes,
+ * and that is only known once both anchors are placed.
+ */
+function resolveAnchor(
   layout: LineLayout,
   stationId: StationId | undefined,
   trackId: StationTrackId | undefined,
@@ -877,34 +932,73 @@ function resolveEnd(
   fallbackKm: Meters,
   out: EndKnots,
 ): EndKnots {
-  const running = runningLane(layout, direction);
   const yard = stationId === undefined ? undefined : layout.depotLaneOfStation.get(stationId);
+  out.lane[0] = standingLane(layout, stationId, trackId, direction);
+  out.off[0] = 0;
+  out.n = 1;
+  out.reach = 0;
   if (yard !== undefined) {
-    const lane = standingLane(layout, stationId, trackId, direction);
     out.x = yard.berthX;
     out.km = yard.km;
-    out.off[0] = 0;
-    out.lane[0] = lane;
-    out.off[1] = Math.abs(yard.berthX - yard.throatX);
+    return out;
+  }
+  out.x = standingX(layout, stationId, trackId, fallbackKm);
+  out.km = layout.stationOf.get(stationId ?? ('' as StationId))?.km ?? fallbackKm;
+  return out;
+}
+
+/**
+ * Fill in how the road at this end reaches the running line, in the direction
+ * of travel — `toward` is +1 when the other end of the leg is at a higher x.
+ *
+ * The offsets come from the road as **drawn**: the flat body first, then the
+ * lead onto the running lane. Reading them off the station block instead
+ * worked only for roads centred on their station, and a 引上線 is not — it
+ * hangs off the end of the block, so its marker used to start swinging while
+ * still on the straight and finish after the turnout was behind it.
+ */
+function resolveKnots(
+  layout: LineLayout,
+  stationId: StationId | undefined,
+  trackId: StationTrackId | undefined,
+  direction: Direction,
+  toward: number,
+  out: EndKnots,
+): EndKnots {
+  const running = runningLane(layout, direction);
+  const lane = out.lane[0]!;
+  const yard = stationId === undefined ? undefined : layout.depotLaneOfStation.get(stationId);
+  if (yard !== undefined) {
+    out.off[1] = Math.abs(out.x - yard.throatX);
     out.lane[1] = lane;
-    out.off[2] = Math.abs(yard.berthX - yard.rootX);
+    out.off[2] = Math.abs(out.x - yard.rootX);
     out.lane[2] = yard.rootLane;
-    out.off[3] = Math.abs(yard.berthX - yard.junctionX);
+    out.off[3] = Math.abs(out.x - yard.junctionX);
     out.lane[3] = running;
     out.n = 4;
     out.reach = out.off[3]!;
     return out;
   }
 
-  const station = stationId === undefined ? undefined : layout.stationOf.get(stationId);
-  const lane = standingLane(layout, stationId, trackId, direction);
-  out.x = standingX(layout, stationId, trackId, fallbackKm);
-  out.km = station?.km ?? fallbackKm;
-  out.off[0] = 0;
-  out.lane[0] = lane;
-  out.off[1] = layout.stationHalfWidth - layout.stationLeadWidth;
+  const road = trackId === undefined ? undefined : layout.roadOfTrack.get(trackId);
+  let bodyEnd: number;
+  let joinX: number;
+  if (road === undefined) {
+    bodyEnd = out.x + toward * (layout.stationHalfWidth - layout.stationLeadWidth);
+    joinX = out.x + toward * layout.stationHalfWidth;
+  } else if (road.stubSide !== 0) {
+    // A stub is connected at one end only — the station end — whichever way
+    // the train is going.
+    bodyEnd = road.stubSide > 0 ? road.bodyX0 : road.bodyX1;
+    joinX = road.stubSide > 0 ? road.x0 : road.x1;
+  } else {
+    bodyEnd = toward >= 0 ? road.bodyX1 : road.bodyX0;
+    joinX = toward >= 0 ? road.x1 : road.x0;
+  }
+
+  out.off[1] = Math.abs(bodyEnd - out.x);
   out.lane[1] = lane;
-  out.off[2] = layout.stationHalfWidth;
+  out.off[2] = Math.max(out.off[1]!, Math.abs(joinX - out.x));
   out.lane[2] = running;
   out.n = 3;
   out.reach = out.off[2]!;
@@ -951,18 +1045,58 @@ export function placeTrainInto(
 
   // Mid-shunt: crossing from one road to another without leaving the station.
   // Both axes move, because a shunt into a 引上線 travels along the line as
-  // well as across it.
+  // well as across it — and it travels along *drawn track*: out along the road
+  // it is leaving, over the throat at the end of the block, and back out onto
+  // the road it is taking. That is the same wiring a running leg follows, so
+  // it is solved with the same knots.
   const blend = args.trackBlend;
   if (blend !== undefined && args.fromTrackId !== undefined) {
     const fromLane = layout.laneOfTrack.get(args.fromTrackId);
     if (fromLane !== undefined) {
       const f = blend < 0 ? 0 : blend > 1 ? 1 : blend;
-      out.lane = fromLane + (out.lane - fromLane) * f;
       const fromX = standingX(layout, stationId, args.fromTrackId, km);
-      out.x = fromX + (out.x - fromX) * f;
+      const toX = out.x;
+      const toLane = out.lane;
+      out.x = fromX + (toX - fromX) * f;
+      if (toX === fromX) {
+        // Two roads berthed at the same x — nothing to travel along, so the
+        // only honest reading is a straight crossing.
+        out.lane = fromLane + (toLane - fromLane) * f;
+        return out;
+      }
+      const toward = toX > fromX ? 1 : -1;
+      resolveAnchor(layout, stationId, args.fromTrackId, direction, km, endA);
+      resolveKnots(layout, stationId, args.fromTrackId, direction, toward, endA);
+      resolveAnchor(layout, stationId, trackId, direction, km, endB);
+      resolveKnots(layout, stationId, trackId, direction, -toward, endB);
+      out.lane = laneAlong(layout, endA, endB, out.x, direction);
     }
   }
   return out;
+}
+
+/**
+ * The lane at world `x` on the polyline joining two ends.
+ *
+ * Both ends' wiring is squeezed in proportion when the gap between them is
+ * shorter than the two leads need, so the path stays continuous and monotone
+ * however tight the move is.
+ */
+function laneAlong(
+  layout: LineLayout,
+  a: EndKnots,
+  b: EndKnots,
+  x: number,
+  direction: Direction,
+): number {
+  const span = Math.abs(b.x - a.x);
+  const need = a.reach + b.reach;
+  if (span === 0 || need <= 0) return a.lane[0]!;
+  const squeeze = need > span ? span / need : 1;
+  const u = Math.abs(x - a.x);
+  if (u <= a.reach * squeeze) return laneAtOffset(a, u / squeeze);
+  if (span - u <= b.reach * squeeze) return laneAtOffset(b, (span - u) / squeeze);
+  return runningLane(layout, direction);
 }
 
 /** Place a train running between two stops, along the drawn wiring. */
@@ -972,8 +1106,11 @@ function placeOnLeg(
   out: TrainPlacement,
 ): TrainPlacement {
   const { km, direction } = args;
-  resolveEnd(layout, args.fromStationId, args.fromTrackId, direction, km, endA);
-  resolveEnd(layout, args.toStationId, args.toTrackId, direction, km, endB);
+  resolveAnchor(layout, args.fromStationId, args.fromTrackId, direction, km, endA);
+  resolveAnchor(layout, args.toStationId, args.toTrackId, direction, km, endB);
+  const toward = endB.x >= endA.x ? 1 : -1;
+  resolveKnots(layout, args.fromStationId, args.fromTrackId, direction, toward, endA);
+  resolveKnots(layout, args.toStationId, args.toTrackId, direction, -toward, endB);
 
   const dkm = endB.km - endA.km;
   const progress = dkm === 0 ? 0 : (km - endA.km) / dkm;
@@ -981,20 +1118,7 @@ function placeOnLeg(
   const dx = endB.x - endA.x;
   const x = endA.x + dx * clamped;
   out.x = x;
-
-  const span = Math.abs(dx);
-  const need = endA.reach + endB.reach;
-  if (span === 0 || need <= 0) {
-    out.lane = endA.lane[0]!;
-    return out;
-  }
-  // A leg shorter than the two ends' wiring squeezes both of them in
-  // proportion, so the polyline stays continuous and monotone.
-  const squeeze = need > span ? span / need : 1;
-  const u = Math.abs(x - endA.x);
-  if (u <= endA.reach * squeeze) out.lane = laneAtOffset(endA, u / squeeze);
-  else if (span - u <= endB.reach * squeeze) out.lane = laneAtOffset(endB, (span - u) / squeeze);
-  else out.lane = runningLane(layout, direction);
+  out.lane = laneAlong(layout, endA, endB, x, direction);
   return out;
 }
 

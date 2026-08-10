@@ -170,6 +170,9 @@ export const TID = {
   connectionMarker: 'connection-marker',
   diagramShowDeadhead: 'diagram-show-deadhead',
   diagramHighlightDuty: 'diagram-highlight-duty',
+  /** 上下線とも / 下りのみ / 上りのみ. */
+  diagramDirection: 'diagram-direction',
+  diagramHighlightNote: 'diagram-highlight-note',
 
   // station yard chart (構内ダイヤ) -------------------------------------------
   yardChart: 'yard-chart',
@@ -177,10 +180,24 @@ export const TID = {
   yardLane: (trackId: string) => `yard-lane-${trackId}`,
   yardBar: (trainId: string) => `yard-bar-${trainId}`,
   yardConflict: 'yard-conflict',
+  /** 入換 — one formation moving between two roads of the same station. */
+  yardShunt: 'yard-shunt',
+  yardZoomIn: 'yard-zoom-in',
+  yardZoomOut: 'yard-zoom-out',
+  yardZoomReset: 'yard-zoom-reset',
+  yardWindow: 'yard-window',
+  yardShuntHint: 'yard-shunt-hint',
 
   // inspector --------------------------------------------------------------
   inspector: 'inspector',
   inspectorTitle: 'inspector-title',
+  /** Jump from the selected train to the 運用 screen, duty expanded. */
+  inspectorOpenDuty: 'inspector-open-duty',
+  /** Draw the selected train's whole duty on the canvas. */
+  inspectorHighlightDuty: 'inspector-highlight-duty',
+  inspectorClearHighlight: 'inspector-clear-highlight',
+  /** One train of the selected duty, in order. */
+  inspectorDutyTrain: (trainId: string) => `inspector-duty-train-${trainId}`,
 
   // stop editor — 停車設定 / 待避 / 緩急接続 ----------------------------------
   stopEditor: 'stop-editor',

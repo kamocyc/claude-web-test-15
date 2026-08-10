@@ -35,6 +35,10 @@ export interface StringDiagramProps extends CanvasViewProps {
   showDeadhead?: boolean;
   /** 'km' spaces stations by distance; 'index' spaces them evenly. */
   verticalScale?: 'km' | 'index';
+  /** Draw one direction on its own; defaults to both. */
+  direction?: 'both' | 'down' | 'up';
+  /** Trains drawn thicker because they are selected elsewhere in the app. */
+  selectedTrainIds?: readonly TrainId[];
 }
 
 export interface StationYardProps {

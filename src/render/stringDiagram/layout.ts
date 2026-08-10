@@ -25,6 +25,13 @@ import { SegmentGrid, type WorldSegment } from '../canvas/hit';
 
 export type VerticalScale = 'km' | 'index';
 
+/**
+ * Which direction is drawn. On a busy line the two directions are two
+ * interleaved lattices, and reading either one means ignoring the other; a
+ * sheet with one of them removed is the classic 下り単独 diagram.
+ */
+export type DiagramDirection = Direction | 'both';
+
 export interface DiagramStation {
   stationId: StationId;
   name: string;
@@ -83,6 +90,7 @@ export interface DiagramMarker {
 
 export interface DiagramLayout {
   verticalScale: VerticalScale;
+  direction: DiagramDirection;
   stations: DiagramStation[];
   yOfStation: Map<StationId, number>;
   trains: DiagramTrain[];
@@ -99,6 +107,8 @@ export interface DiagramLayout {
 export interface DiagramLayoutOptions {
   verticalScale?: VerticalScale;
   showDeadhead?: boolean;
+  /** Draw one direction only; defaults to `'both'`. */
+  direction?: DiagramDirection;
   /** Time window; defaults to the document's service day. */
   from?: Sec;
   to?: Sec;
@@ -152,6 +162,7 @@ export function computeDiagramLayout(
   const doc = index.doc;
   const verticalScale = opts.verticalScale ?? 'km';
   const showDeadhead = opts.showDeadhead ?? true;
+  const direction = opts.direction ?? 'both';
 
   const ordered = orderedStations(doc);
   const stations: DiagramStation[] = ordered.map((s, i) => ({
@@ -199,6 +210,7 @@ export function computeDiagramLayout(
     const tl = index.timelines.get(trainId);
     if (!tl) continue;
     if (!showDeadhead && tl.category !== 'service') continue;
+    if (direction !== 'both' && tl.direction !== direction) continue;
 
     const type = getEntity(doc.trainTypes, tl.typeId);
     const points: DiagramPoint[] = [];
@@ -248,17 +260,25 @@ export function computeDiagramLayout(
     }
   }
 
-  const overtakes: DiagramMarker[] = index.overtakes.map((o: OvertakeEvent) => ({
-    stationId: o.stationId,
-    x: o.passAt,
-    y: yOfStation.get(o.stationId) ?? kmToY(index.kmOfStation.get(o.stationId) ?? 0),
-    waitingTrainId: o.waitingTrainId,
-    passingTrainId: o.passingTrainId,
-    ok: o.legal,
-  }));
+  // A 待避 diamond or a 接続 bracket describes a relationship between two
+  // lines. With one of those lines filtered away the marker is left pointing
+  // at nothing, so it goes too.
+  const drawn = (trainId: TrainId | undefined): boolean =>
+    trainId === undefined || trainById.has(trainId);
+
+  const overtakes: DiagramMarker[] = index.overtakes
+    .filter((o: OvertakeEvent) => drawn(o.waitingTrainId) && drawn(o.passingTrainId))
+    .map((o: OvertakeEvent) => ({
+      stationId: o.stationId,
+      x: o.passAt,
+      y: yOfStation.get(o.stationId) ?? kmToY(index.kmOfStation.get(o.stationId) ?? 0),
+      waitingTrainId: o.waitingTrainId,
+      passingTrainId: o.passingTrainId,
+      ok: o.legal,
+    }));
 
   const connections: DiagramMarker[] = index.connections
-    .filter((c: ConnectionEvent) => c.viable)
+    .filter((c: ConnectionEvent) => c.viable && drawn(c.fromTrainId) && drawn(c.toTrainId))
     .map((c: ConnectionEvent) => {
       const y = yOfStation.get(c.stationId) ?? kmToY(index.kmOfStation.get(c.stationId) ?? 0);
       const at = connectionAnchorSec(index, c);
@@ -289,6 +309,7 @@ export function computeDiagramLayout(
 
   return {
     verticalScale,
+    direction,
     stations,
     yOfStation,
     trains,

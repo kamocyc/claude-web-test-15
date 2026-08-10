@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { TID } from '@e2e/testids';
 
-import { entityList } from '@/domain/units';
+import type { TrainId } from '@/domain/ids';
+import { entityList, getEntity } from '@/domain/units';
 import { StringDiagramCanvas } from '@/render';
 import { useClockStore } from '@/store/clockStore';
-import { useUiStore } from '@/store/uiStore';
+import { useUiStore, type DirectionFilter } from '@/store/uiStore';
 import { useDoc } from '../hooks';
 
 import styles from './Editor.module.css';
@@ -15,10 +16,24 @@ export function DiagramScreen() {
   const select = useUiStore((s) => s.select);
   const seek = useClockStore((s) => s.seek);
   const [showDeadhead, setShowDeadhead] = useState(true);
-  const [highlightDutyId, setHighlightDutyId] = useState('');
   const [verticalScale, setVerticalScale] = useState<'km' | 'index'>('km');
 
+  // The duty highlight and the direction filter live in the ui store: the
+  // inspector sets the first one from a train, and both survive a trip to
+  // another screen and back.
+  const highlightDutyId = useUiStore((s) => s.highlightDutyId);
+  const setHighlightDuty = useUiStore((s) => s.setHighlightDuty);
+  const direction = useUiStore((s) => s.diagramDirection);
+  const setDirection = useUiStore((s) => s.setDiagramDirection);
+  const selected = useUiStore((s) => s.selected);
+
   const duties = useMemo(() => entityList(doc.duties), [doc]);
+  const selectedTrainIds = useMemo(
+    (): TrainId[] => selected.flatMap((ref) => (ref.kind === 'train' ? [ref.trainId] : [])),
+    [selected],
+  );
+  const highlightedDuty =
+    highlightDutyId === undefined ? undefined : getEntity(doc.duties, highlightDutyId);
 
   return (
     <div className={styles.screen}>
@@ -33,10 +48,23 @@ export function DiagramScreen() {
           回送を表示
         </label>
         <select
+          data-testid={TID.diagramDirection}
+          aria-label="方向"
+          value={direction}
+          onChange={(e) => setDirection(e.currentTarget.value as DirectionFilter)}
+        >
+          <option value="both">上下線とも表示</option>
+          <option value="down">{doc.line.downDirectionLabel}のみ</option>
+          <option value="up">{doc.line.upDirectionLabel}のみ</option>
+        </select>
+        <select
           data-testid={TID.diagramHighlightDuty}
           aria-label="運用を強調"
-          value={highlightDutyId}
-          onChange={(e) => setHighlightDutyId(e.currentTarget.value)}
+          value={highlightDutyId ?? ''}
+          onChange={(e) => {
+            const value = e.currentTarget.value;
+            setHighlightDuty(value === '' ? undefined : value);
+          }}
         >
           <option value="">運用の強調なし</option>
           {duties.map((d) => (
@@ -53,13 +81,20 @@ export function DiagramScreen() {
           <option value="km">縦軸: 営業キロ</option>
           <option value="index">縦軸: 等間隔</option>
         </select>
+        {highlightedDuty !== undefined ? (
+          <span className={styles.hint} data-testid={TID.diagramHighlightNote}>
+            運用 {highlightedDuty.code} を強調中
+          </span>
+        ) : null}
       </div>
 
       <div className={styles.canvasHost}>
         <StringDiagramCanvas
           showDeadhead={showDeadhead}
           verticalScale={verticalScale}
-          {...(highlightDutyId !== '' ? { highlightDutyId } : {})}
+          direction={direction}
+          selectedTrainIds={selectedTrainIds}
+          {...(highlightDutyId !== undefined ? { highlightDutyId } : {})}
           onSelect={(ref, additive) => select(ref, additive)}
           onSeek={(t) => seek(t)}
         />

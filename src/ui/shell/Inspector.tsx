@@ -1,15 +1,31 @@
 import { useMemo } from 'react';
 import { TID } from '@e2e/testids';
 
+import type { DutyId } from '@/domain/ids';
+import type { ProjectDocument } from '@/domain/model';
 import { formatTime } from '@/domain/time';
-import { formatKm, getEntity } from '@/domain/units';
-import { trainLabel, trainStartSec, trainEndSec, dutySpan, dutyDistance } from '@/domain/project';
+import { entityList, formatKm, getEntity } from '@/domain/units';
+import {
+  dutyDistance,
+  dutyOfTrainMap,
+  dutySpan,
+  trainEndSec,
+  trainLabel,
+  trainStartSec,
+} from '@/domain/project';
 import { useUiStore } from '@/store/uiStore';
 import { useDoc } from '../hooks';
 
 import styles from './Shell.module.css';
 
-/** Details of the primary selection. Read-only; editing happens in screens. */
+/**
+ * Details of the primary selection. Read-only; editing happens in screens.
+ *
+ * The one thing it does beyond showing values is answer "and what does this
+ * vehicle do all day?": a selected train names its 運用 and offers the two ways
+ * of looking at it — open the 運用 board, or draw the whole duty on the canvas
+ * with everything else dimmed.
+ */
 export function Inspector() {
   const open = useUiStore((s) => s.inspectorOpen);
   const toggle = useUiStore((s) => s.toggleInspector);
@@ -17,6 +33,14 @@ export function Inspector() {
   const count = useUiStore((s) => s.selected.length);
 
   const doc = useDoc();
+  /** The duty the selected train belongs to, if any — drives the actions. */
+  const dutyId = useMemo((): DutyId | undefined => {
+    if (ref === undefined) return undefined;
+    if (ref.kind === 'duty') return ref.dutyId;
+    if (ref.kind !== 'train') return undefined;
+    return dutyOfTrainMap(doc).get(ref.trainId);
+  }, [doc, ref]);
+
   const rows = useMemo((): Array<[string, string]> => {
     if (ref === undefined) return [];
     switch (ref.kind) {
@@ -25,6 +49,7 @@ export function Inspector() {
         if (train === undefined) return [['列車', '(削除済み)']];
         const start = trainStartSec(train);
         const end = trainEndSec(train);
+        const duty = getEntity(doc.duties, dutyId);
         return [
           ['列車', trainLabel(doc, train)],
           ['番号', train.number],
@@ -33,6 +58,8 @@ export function Inspector() {
           ['停車数', String(train.stops.length)],
           ['始発', start === undefined ? '—' : formatTime(start)],
           ['終着', end === undefined ? '—' : formatTime(end)],
+          ['運用', duty === undefined ? '未割当' : duty.code],
+          ['充当編成', formationCodeOfDuty(doc, dutyId) ?? '—'],
         ];
       }
       case 'station': {
@@ -80,6 +107,7 @@ export function Inspector() {
           ['時間帯', span === undefined ? '—' : `${formatTime(span.from)}–${formatTime(span.to)}`],
           ['走行距離', formatKm(dutyDistance(doc, duty))],
           ['必要両数', duty.requiredCars === undefined ? '—' : `${duty.requiredCars}両`],
+          ['充当編成', formationCodeOfDuty(doc, duty.id) ?? '—'],
         ];
       }
       case 'formation': {
@@ -114,7 +142,7 @@ export function Inspector() {
       default:
         return [];
     }
-  }, [doc, ref]);
+  }, [doc, ref, dutyId]);
 
   if (!open) {
     return (
@@ -146,8 +174,110 @@ export function Inspector() {
           </div>
         ))}
       </dl>
+      {ref?.kind === 'train' && dutyId === undefined ? (
+        <p className={styles.inspectorNote}>この列車はまだ運用に組み込まれていません。</p>
+      ) : null}
+      {dutyId === undefined ? null : <DutyActions dutyId={dutyId} />}
+      {ref?.kind === 'duty' && dutyId !== undefined ? <DutyTrains dutyId={dutyId} /> : null}
     </aside>
   );
+}
+
+/**
+ * The two ways of looking at a duty, offered wherever a duty is in view —
+ * including when what is selected is one of its trains.
+ */
+function DutyActions({ dutyId }: { dutyId: DutyId }) {
+  const doc = useDoc();
+  const focusOn = useUiStore((s) => s.focusOn);
+  const showDutyInDiagram = useUiStore((s) => s.showDutyInDiagram);
+  const highlightDutyId = useUiStore((s) => s.highlightDutyId);
+  const setHighlightDuty = useUiStore((s) => s.setHighlightDuty);
+
+  const duty = getEntity(doc.duties, dutyId);
+  if (duty === undefined) return null;
+  const span = dutySpan(doc, duty);
+  const highlighted = highlightDutyId === duty.id;
+
+  return (
+    <div className={styles.inspectorActions}>
+      <button
+        type="button"
+        data-testid={TID.inspectorOpenDuty}
+        onClick={() =>
+          focusOn({
+            ref: { kind: 'duty', dutyId: duty.id },
+            ...(span === undefined ? {} : { at: span.from }),
+          })
+        }
+      >
+        運用 {duty.code} を開く
+      </button>
+      {highlighted ? (
+        <button
+          type="button"
+          data-testid={TID.inspectorClearHighlight}
+          onClick={() => setHighlightDuty(undefined)}
+        >
+          強調を解除
+        </button>
+      ) : (
+        <button
+          type="button"
+          data-testid={TID.inspectorHighlightDuty}
+          onClick={() => showDutyInDiagram(duty.id, span?.from)}
+        >
+          運行図表で強調
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The duty's trains in order — one click each to follow the vehicle along. */
+function DutyTrains({ dutyId }: { dutyId: DutyId }) {
+  const doc = useDoc();
+  const focusOn = useUiStore((s) => s.focusOn);
+  const duty = getEntity(doc.duties, dutyId);
+  if (duty === undefined) return null;
+
+  return (
+    <ul className={styles.inspectorList}>
+      {duty.legs.map((leg, index) => {
+        if (leg.kind !== 'train') return null;
+        const train = getEntity(doc.trains, leg.trainId);
+        if (train === undefined) return null;
+        const start = trainStartSec(train);
+        return (
+          <li key={`${leg.trainId}-${index}`}>
+            <button
+              type="button"
+              data-testid={TID.inspectorDutyTrain(train.id)}
+              onClick={() =>
+                focusOn({
+                  ref: { kind: 'train', trainId: train.id },
+                  ...(start === undefined ? {} : { at: start }),
+                })
+              }
+            >
+              <span>{start === undefined ? '—' : formatTime(start)}</span>
+              <span>{trainLabel(doc, train)}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Which formation works this duty on the active date, if one is assigned. */
+function formationCodeOfDuty(doc: ProjectDocument, dutyId: DutyId | undefined): string | undefined {
+  if (dutyId === undefined) return undefined;
+  const assignment = entityList(doc.assignments).find(
+    (a) => a.date === doc.settings.activeDate && a.dutyId === dutyId,
+  );
+  if (assignment === undefined) return undefined;
+  return getEntity(doc.formations, assignment.formationId)?.code;
 }
 
 function titleOf(kind: string): string {

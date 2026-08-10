@@ -15,7 +15,9 @@ export function LineScreen() {
   const select = useUiStore((s) => s.select);
   const seek = useClockStore((s) => s.seek);
   const [showDeadhead, setShowDeadhead] = useState(true);
-  const [highlightDutyId, setHighlightDutyId] = useState('');
+  // Shared with 運行図表 and with the inspector's 「運用を強調」 — see uiStore.
+  const highlightDutyId = useUiStore((s) => s.highlightDutyId);
+  const setHighlightDuty = useUiStore((s) => s.setHighlightDuty);
 
   const types = useMemo(
     () => entityList(doc.trainTypes).slice().sort((a, b) => a.sortOrder - b.sortOrder),
@@ -36,8 +38,11 @@ export function LineScreen() {
         </button>
         <select
           aria-label="運用を強調"
-          value={highlightDutyId}
-          onChange={(e) => setHighlightDutyId(e.currentTarget.value)}
+          value={highlightDutyId ?? ''}
+          onChange={(e) => {
+            const value = e.currentTarget.value;
+            setHighlightDuty(value === '' ? undefined : value);
+          }}
         >
           <option value="">運用の強調なし</option>
           {duties.map((d) => (
@@ -51,7 +56,7 @@ export function LineScreen() {
       <div className={styles.canvasHost}>
         <LineViewCanvas
           showDeadhead={showDeadhead}
-          {...(highlightDutyId !== '' ? { highlightDutyId } : {})}
+          {...(highlightDutyId !== undefined ? { highlightDutyId } : {})}
           onSelect={(ref, additive) => select(ref, additive)}
           onSeek={(t) => seek(t)}
         />

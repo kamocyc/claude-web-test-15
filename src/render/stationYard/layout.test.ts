@@ -58,6 +58,74 @@ describe('computeYardLayout', () => {
   });
 });
 
+describe('入換 — the move between two roads', () => {
+  const index = sampleIndex();
+
+  /** Two bookings of 運用 01 at D駅: the arrival road, then another road. */
+  function withShunt(gapSec: number, secondTrack = TOY.d2) {
+    const intervals: Record<string, OccupancyInterval[]> = {
+      [TOY.d1]: [
+        {
+          trackId: TOY.d1,
+          stationId: TOY.stationD,
+          trainId: TOY.localDown,
+          from: 8 * H + 10 * M,
+          to: 8 * H + 12 * M,
+          bookedFrom: 8 * H + 10 * M + 30,
+          bookedTo: 8 * H + 11 * M + 30,
+        },
+      ],
+      [secondTrack]: [
+        {
+          trackId: secondTrack,
+          stationId: TOY.stationD,
+          trainId: TOY.depotIn,
+          from: 8 * H + 12 * M + gapSec,
+          to: 8 * H + 20 * M + gapSec,
+          bookedFrom: 8 * H + 12 * M + 30 + gapSec,
+          bookedTo: 8 * H + 19 * M + gapSec,
+        },
+      ],
+    };
+    return computeYardLayout(
+      index.doc,
+      {
+        ...index,
+        trackIntervals: new Map(Object.entries(intervals)) as typeof index.trackIntervals,
+      },
+      TOY.stationD,
+    );
+  }
+
+  it('joins two roads one duty used in succession', () => {
+    const layout = withShunt(0);
+    expect(layout.shunts).toHaveLength(1);
+    const shunt = layout.shunts[0]!;
+    expect(shunt.dutyId).toBe(TOY.dutyLocal);
+    expect(shunt.fromTrackId).toBe(TOY.d1);
+    expect(shunt.toTrackId).toBe(TOY.d2);
+    expect(shunt.fromLane).not.toBe(shunt.toLane);
+    // It leaves as the first booking ends and takes the second as it begins.
+    expect(shunt.from).toBe(8 * H + 11 * M + 30);
+    expect(shunt.to).toBe(8 * H + 12 * M + 30);
+  });
+
+  it('never draws one for stock that stayed where it was', () => {
+    expect(withShunt(0, TOY.d1).shunts).toHaveLength(0);
+  });
+
+  it('will not join two visits with a trip in between', () => {
+    // Half an hour away is a train worked out and back, not a shunt.
+    expect(withShunt(30 * M).shunts).toHaveLength(0);
+  });
+
+  it('finds the 折り返し of the toy line without inventing a move', () => {
+    // 運用 01 arrives at D on 1番線 and leaves from it: nothing moved.
+    const layout = computeYardLayout(index.doc, index, TOY.stationD);
+    expect(layout.shunts).toEqual([]);
+  });
+});
+
 describe('conflict detection', () => {
   it('marks both sides of an overlap', () => {
     const scene = sampleSceneWithYardConflict();

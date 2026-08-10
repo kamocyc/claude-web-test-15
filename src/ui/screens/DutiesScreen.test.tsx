@@ -87,6 +87,33 @@ describe('留置・検査の行路', () => {
   });
 });
 
+describe('運用へのジャンプ', () => {
+  beforeEach(reset);
+
+  it('opens the focused duty without anyone clicking 行路を編集', () => {
+    useUiStore.getState().focusOn({ ref: { kind: 'duty', dutyId: TOY.dutyLocal } });
+    render(<DutiesScreen />);
+    expect(screen.getByTestId(TID.dutyLegList(TOY.dutyLocal))).toBeTruthy();
+  });
+
+  it('opens the duty that works a focused train, and marks that leg', () => {
+    useUiStore.getState().focusOn({ ref: { kind: 'train', trainId: TOY.localDown } });
+    render(<DutiesScreen />);
+
+    const legs = screen.getByTestId(TID.dutyLegList(TOY.dutyLocal));
+    const marked = legs.querySelectorAll('tbody tr[class]');
+    expect(marked).toHaveLength(1);
+    // 各101 is the second leg of 運用 01 (出庫 → 各101 → 留置 → 入庫).
+    expect(marked[0]!.getAttribute('data-leg-index')).toBe('1');
+  });
+
+  it('leaves the board alone when the focus is something it cannot show', () => {
+    useUiStore.getState().focusOn({ ref: { kind: 'station', stationId: TOY.stationC } });
+    render(<DutiesScreen />);
+    expect(screen.queryByTestId(TID.dutyLegList(TOY.dutyLocal))).toBeNull();
+  });
+});
+
 describe('運用の条件', () => {
   beforeEach(reset);
 

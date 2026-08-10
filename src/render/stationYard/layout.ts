@@ -53,11 +53,35 @@ export interface YardBar {
   overtakeWait: boolean;
 }
 
+/**
+ * A formation moving from one road to another without leaving the station.
+ *
+ * The bars say where the stock stands; only the line between them says it
+ * *moved*, and a move between roads is the one thing a 構内ダイヤ is drawn for
+ * that a list of occupancies cannot show. It is derived rather than authored:
+ * two consecutive bookings of the same duty on two different roads, with no
+ * gap between them, is a shunt whether or not anyone wrote one down.
+ */
+export interface YardShunt {
+  dutyId: DutyId;
+  fromTrackId: StationTrackId;
+  toTrackId: StationTrackId;
+  fromLane: number;
+  toLane: number;
+  /** Leaves the first road / takes the second. Equal for an instant move. */
+  from: Sec;
+  to: Sec;
+  fromTrainId: TrainId;
+  toTrainId: TrainId;
+  label: string;
+}
+
 export interface YardLayout {
   stationId: StationId;
   stationName: string;
   lanes: YardLane[];
   bars: YardBar[];
+  shunts: YardShunt[];
   /** Time window covering every bar, padded. */
   from: Sec;
   to: Sec;
@@ -65,6 +89,14 @@ export interface YardLayout {
 }
 
 const PAD_SEC = 300;
+
+/**
+ * The longest gap between two bookings that still reads as one stay.
+ *
+ * Beyond it the formation went somewhere — worked a train out and back, ran to
+ * the depot — and joining the two bars would draw a shunt that never happened.
+ */
+const SHUNT_MAX_GAP_SEC = 300;
 
 export function computeYardLayout(
   doc: ProjectDocument,
@@ -117,7 +149,8 @@ export function computeYardLayout(
     }
   }
 
-  bars.sort((a, b) => a.laneIndex - b.laneIndex || a.from - b.from);
+  bars.sort((a, b) => a.laneIndex - b.laneIndex || a.from - b.from || b.to - a.to);
+  dropContainedBookings(bars);
 
   // Mark overlaps, applying the same exclusion `track.doubleOccupancy` uses:
   // one duty is one physical formation, so it cannot conflict with itself. A
@@ -158,10 +191,74 @@ export function computeYardLayout(
     stationName: station?.name ?? '',
     lanes,
     bars,
+    shunts: findShunts(bars),
     from: from - PAD_SEC,
     to: to + PAD_SEC,
     conflictCount,
   };
+}
+
+/**
+ * Drop a booking that another booking of the same stock already covers.
+ *
+ * A terminating arrival held for its own 折り返し produces both the stop's
+ * booking and the extended one, on the same road, starting at the same second.
+ * They are one stay, so the shorter is a bar drawn exactly on top of another —
+ * invisible, but a second click target and a second copy of the label.
+ * Mutates in place, keeping the sort order.
+ */
+function dropContainedBookings(bars: YardBar[]): void {
+  for (let i = bars.length - 1; i >= 0; i--) {
+    const b = bars[i]!;
+    for (let j = 0; j < bars.length; j++) {
+      if (j === i) continue;
+      const other = bars[j]!;
+      if (other.trainId !== b.trainId || other.trackId !== b.trackId) continue;
+      const covers = other.from <= b.from && other.to >= b.to;
+      const strictly = other.from < b.from || other.to > b.to;
+      // Identical pairs would otherwise remove each other; keep the earlier.
+      if (covers && (strictly || j < i)) {
+        bars.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
+
+/** Consecutive bookings of one duty on two roads: the stock was moved. */
+function findShunts(bars: readonly YardBar[]): YardShunt[] {
+  const byDuty = new Map<DutyId, YardBar[]>();
+  for (const bar of bars) {
+    if (bar.dutyId === undefined) continue;
+    const list = byDuty.get(bar.dutyId);
+    if (list === undefined) byDuty.set(bar.dutyId, [bar]);
+    else list.push(bar);
+  }
+
+  const out: YardShunt[] = [];
+  for (const [dutyId, list] of byDuty) {
+    list.sort((a, b) => a.bookedFrom - b.bookedFrom || a.laneIndex - b.laneIndex);
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1]!;
+      const b = list[i]!;
+      if (a.trackId === b.trackId) continue;
+      if (b.from - a.to > SHUNT_MAX_GAP_SEC) continue;
+      out.push({
+        dutyId,
+        fromTrackId: a.trackId,
+        toTrackId: b.trackId,
+        fromLane: a.laneIndex,
+        toLane: b.laneIndex,
+        from: a.bookedTo,
+        to: Math.max(b.bookedFrom, a.bookedTo),
+        fromTrainId: a.trainId,
+        toTrainId: b.trainId,
+        label: b.label,
+      });
+    }
+  }
+  out.sort((a, b) => a.from - b.from || a.fromLane - b.fromLane);
+  return out;
 }
 
 function findStopIndex(doc: ProjectDocument, trainId: TrainId, stationId: StationId): number {
