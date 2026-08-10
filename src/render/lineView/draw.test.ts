@@ -16,7 +16,7 @@ import { TOY } from '@/testing/toyProject';
 import { FIXTURE_T, sampleScene } from '../__fixtures__/sampleScene';
 import { createCamera, crisp, worldToScreenX } from '../canvas/camera';
 import { HitRects } from '../canvas/hit';
-import { createRecordingContext } from '../canvas/recordingContext';
+import { createRecordingContext, type RecordingContext } from '../canvas/recordingContext';
 import { approxTextWidth } from '../canvas/textCache';
 import { FALLBACK_THEME } from '../canvas/theme';
 import {
@@ -25,14 +25,42 @@ import {
   drawLineStatic,
   lineStationPositions,
   lineTrainPositions,
-  MARKER_H,
-  MARKER_W,
+  TRAIN_DOT_R,
+  TRAIN_LABEL_DRIFT,
+  TRAIN_LABEL_H,
+  TRAIN_LABEL_PITCH,
   placementOf,
   type LineDynamicEnv,
 } from './draw';
 import { computeLineLayout, laneCenterY, LANE_HEIGHT } from './layout';
 
 const VIEWPORT = { width: 900, height: 200 };
+
+/**
+ * Every rounded rect of exactly `h` px in the call log, as a rectangle.
+ *
+ * `roundRectPath` emits a fixed nine-op sequence, so the geometry can be read
+ * straight back out of the recording — which is how the label plates (and only
+ * the label plates, by their height) are recovered for the overlap checks.
+ */
+function platesOf(
+  ctx: RecordingContext,
+  h = TRAIN_LABEL_H,
+): Array<{ x: number; y: number; w: number; h: number }> {
+  const out: Array<{ x: number; y: number; w: number; h: number }> = [];
+  const calls = ctx.calls;
+  for (let i = 0; i + 8 < calls.length; i++) {
+    if (calls[i]!.op !== 'moveTo' || calls[i + 8]!.op !== 'quadraticCurveTo') continue;
+    if (calls[i + 9]?.op !== 'closePath') continue;
+    const top = Number(calls[i]!.args[1]);
+    const right = Number(calls[i + 2]!.args[0]);
+    const bottom = Number(calls[i + 4]!.args[1]);
+    const left = Number(calls[i + 6]!.args[0]);
+    if (Math.abs(bottom - top - h) > 1e-6) continue;
+    out.push({ x: left, y: top, w: right - left, h: bottom - top });
+  }
+  return out;
+}
 
 function makeEnv() {
   const scene = sampleScene(FIXTURE_T);
@@ -236,12 +264,29 @@ describe('drawLineDynamic', () => {
     expect(hits.count).toBe(active.length);
   });
 
-  it('marks the 待避 train with an amber ring and a 待避 badge', () => {
+  it('marks the 待避 train with an amber ring and says 待避 in its label', () => {
     const ctx = createRecordingContext();
     drawLineDynamic(ctx, dynamicEnv());
     const strokes = ctx.ops('set strokeStyle').map((c) => c.args[0]);
     expect(strokes).toContain(FALLBACK_THEME.waitRing);
-    expect(ctx.ops('fillText').map((c) => c.args[0])).toContain('待避');
+    expect(ctx.ops('fillText').map((c) => String(c.args[0])).join(' ')).toContain('待避');
+  });
+
+  it('puts a dot exactly where the train is, and never anywhere else', () => {
+    const env = dynamicEnv();
+    const ctx = createRecordingContext();
+    drawLineDynamic(ctx, env);
+    const dots = ctx.ops('arc').map((c) => ({ x: Number(c.args[0]), y: Number(c.args[1]) }));
+    for (const train of env.snapshot.trains) {
+      if (train.phase.phase === 'pending' || train.phase.phase === 'finished') continue;
+      const p = placementOf(env.layout, train);
+      const sx = worldToScreenX(env.camera, p.x);
+      const sy = laneCenterY(p.lane, env.camera.y, env.camera.scaleY);
+      expect(
+        dots.some((d) => Math.abs(d.x - sx) < 1e-6 && Math.abs(d.y - sy) < 1e-6),
+        `no dot at ${train.number}'s position`,
+      ).toBe(true);
+    }
   });
 
   it('puts the waiting train on a different lane from the train passing it', () => {
@@ -258,10 +303,9 @@ describe('drawLineDynamic', () => {
   it('writes the train label and the formation code', () => {
     const ctx = createRecordingContext();
     drawLineDynamic(ctx, dynamicEnv());
-    const texts = ctx.ops('fillText').map((c) => c.args[0]);
-    expect(texts).toContain('各 101');
-    expect(texts).toContain('急 201');
-    expect(texts).toContain('T01F(6)');
+    const texts = ctx.ops('fillText').map((c) => String(c.args[0]));
+    expect(texts).toContain('▶各 101');
+    expect(texts.some((t) => t.startsWith('T01F(6)'))).toBe(true);
   });
 
   it('hides 回送 when showDeadhead is false', () => {
@@ -280,11 +324,15 @@ describe('drawLineDynamic', () => {
     expect(hidden.count).toBe(0);
   });
 
-  it('dashes the border of a non-service move', () => {
-    const scene = sampleScene(7 * 3600 + 51 * 60);
+  it('draws a non-service move as a hollow dot', () => {
+    const scene = sampleScene(7 * 3600 + 51 * 60); // 回8001 is running
     const ctx = createRecordingContext();
     drawLineDynamic(ctx, dynamicEnv({ snapshot: scene.snapshot }));
-    expect(ctx.ops('setLineDash').some((c) => Array.isArray(c.args[0]) && (c.args[0] as number[]).length > 0)).toBe(true);
+    // Filled with the background and stroked in the type colour — the exact
+    // inverse of a service train, which is filled with the type colour.
+    const i = ctx.calls.findIndex((c) => c.op === 'arc');
+    const after = ctx.calls.slice(i);
+    expect(after.find((c) => c.op === 'set fillStyle')?.args[0]).toBe(FALLBACK_THEME.bg);
   });
 
   it('desaturates trains outside the highlighted duty', () => {
@@ -300,16 +348,20 @@ describe('drawLineDynamic', () => {
     expect(highlighted.lines()).not.toEqual(plain.lines());
   });
 
-  it('registers hit rects that match the drawn marker size', () => {
+  it('registers a hit rect centred on the train, covering its label', () => {
     const env = dynamicEnv();
     const hits = new HitRects<TrainId>();
     drawLineDynamic(createRecordingContext(), { ...env, hits });
     const local = env.snapshot.trains.find((t) => t.number === '101')!;
     const rect = hits.rectOf(local.trainId)!;
-    expect(rect.w).toBe(MARKER_W);
-    expect(rect.h).toBe(MARKER_H);
     const p = placementOf(env.layout, local);
-    expect(rect.x + MARKER_W / 2).toBeCloseTo(worldToScreenX(env.camera, p.x));
+    const sx = worldToScreenX(env.camera, p.x);
+    const sy = laneCenterY(p.lane, env.camera.y, env.camera.scaleY);
+    expect(rect.x + rect.w / 2).toBeCloseTo(sx);
+    expect(rect.h).toBeGreaterThanOrEqual(TRAIN_DOT_R * 2);
+    // The dot is inside it, and so is the label row it was given.
+    expect(rect.y).toBeLessThanOrEqual(sy);
+    expect(rect.y + rect.h).toBeGreaterThanOrEqual(sy);
   });
 
   it('names each depot and says how many formations are stabled', () => {
@@ -374,59 +426,76 @@ describe('drawLineDynamic', () => {
     drawLineDynamic(ctx, { ...env, hits });
 
     const texts = ctx.ops('fillText').map((c) => String(c.args[0]));
-    expect(texts).toContain('各 101');
-    expect(texts).toContain('折返');
+    expect(texts).toContain('▶各 101');
+    expect(texts.join(' ')).toContain('折返');
     expect(hits.rectOf(TOY.localDown)).toBeDefined();
     // The successor has not started, so exactly one marker is on the platform.
     expect(hits.rectOf(TOY.depotIn)).toBeUndefined();
   });
 
-  it('never lets two marker boxes on the same lane overlap', () => {
+  it('never moves a bunched train — every dot stays on its own position', () => {
+    // Six trains 30 m apart is 6 px at the fixture camera and the labels are
+    // an order of magnitude wider. The old marker slid along the lane to make
+    // room; the dot must not.
     const env = dynamicEnv({ snapshot: bunched(6) });
-    const hits = new HitRects<TrainId>();
-    drawLineDynamic(createRecordingContext(), { ...env, hits });
-    expect(hits.count).toBe(6);
+    const ctx = createRecordingContext();
+    drawLineDynamic(ctx, env);
 
-    const rects = env.snapshot.trains.map((t) => hits.rectOf(t.trainId)!);
-    for (let i = 0; i < rects.length; i++) {
-      for (let j = i + 1; j < rects.length; j++) {
-        const a = rects[i]!;
-        const b = rects[j]!;
-        if (a.y !== b.y) continue;
-        expect(a.x + a.w <= b.x || b.x + b.w <= a.x).toBe(true);
+    const dots = ctx.ops('arc').map((c) => Number(c.args[0]));
+    for (const train of env.snapshot.trains) {
+      const sx = worldToScreenX(env.camera, placementOf(env.layout, train).x);
+      expect(dots.some((x) => Math.abs(x - sx) < 1e-6), `${train.number} moved`).toBe(true);
+    }
+    // …and they are genuinely six distinct, tightly packed positions.
+    expect(new Set(dots.map((x) => Math.round(x * 1000))).size).toBe(6);
+  });
+
+  it('never overlaps two labels, and drops the ones it cannot place', () => {
+    const env = dynamicEnv({ snapshot: bunched(6) });
+    const ctx = createRecordingContext();
+    drawLineDynamic(ctx, env);
+
+    // Every label is drawn on its own background plate, so the plates are the
+    // label boxes. No two of them may intersect.
+    const plates = platesOf(ctx);
+    expect(plates.length).toBeGreaterThan(0);
+    expect(plates.length).toBeLessThanOrEqual(6);
+    for (let i = 0; i < plates.length; i++) {
+      for (let j = i + 1; j < plates.length; j++) {
+        const a = plates[i]!;
+        const b = plates[j]!;
+        const clear =
+          a.x + a.w <= b.x + 1e-9 ||
+          b.x + b.w <= a.x + 1e-9 ||
+          a.y + a.h <= b.y + 1e-9 ||
+          b.y + b.h <= a.y + 1e-9;
+        expect(clear, `labels ${i} and ${j} overlap`).toBe(true);
       }
     }
   });
 
-  it('keeps the digest on the true position when a box has slid', () => {
+  it('keeps every label within a few rows of its own train', () => {
     const env = dynamicEnv({ snapshot: bunched(6) });
-    const hits = new HitRects<TrainId>();
-    drawLineDynamic(createRecordingContext(), { ...env, hits });
+    const ctx = createRecordingContext();
+    drawLineDynamic(ctx, env);
+    const lane = placementOf(env.layout, env.snapshot.trains[0]!).lane;
+    const sy = laneCenterY(lane, env.camera.y, env.camera.scaleY);
+    for (const plate of platesOf(ctx)) {
+      // A label further away than the drift limit would look like it belonged
+      // to a different train, which is worse than no label.
+      expect(Math.abs(plate.y + plate.h / 2 - sy)).toBeLessThan(
+        (TRAIN_LABEL_DRIFT + 2) * TRAIN_LABEL_PITCH,
+      );
+    }
+  });
 
+  it('reports the true position in the digest, whatever the labels did', () => {
+    const env = dynamicEnv({ snapshot: bunched(6) });
     const digest = lineTrainPositions(env.layout, env.camera, env.snapshot);
-    let moved = 0;
     for (const train of env.snapshot.trains) {
       const truth = digest.find((d) => d.id === train.trainId)!;
       const expected = worldToScreenX(env.camera, placementOf(env.layout, train).x);
       expect(truth.sx).toBe(Math.round(expected));
-      if (Math.abs(hits.rectOf(train.trainId)!.x + MARKER_W / 2 - expected) > 1) moved++;
-    }
-    // …and most boxes really did move, so the assertion above is not vacuous.
-    expect(moved).toBeGreaterThanOrEqual(4);
-  });
-
-  it('draws a leader that starts at the train, not at the box', () => {
-    const env = dynamicEnv({ snapshot: bunched(6) });
-    const hits = new HitRects<TrainId>();
-    const ctx = createRecordingContext();
-    drawLineDynamic(ctx, { ...env, hits });
-
-    const starts = new Set(ctx.ops('moveTo').map((c) => Number(c.args[0])));
-    for (const train of env.snapshot.trains) {
-      const truth = worldToScreenX(env.camera, placementOf(env.layout, train).x);
-      const box = hits.rectOf(train.trainId)!.x + MARKER_W / 2;
-      if (Math.abs(box - truth) <= 2) continue;
-      expect(starts.has(crisp(truth))).toBe(true);
     }
   });
 });

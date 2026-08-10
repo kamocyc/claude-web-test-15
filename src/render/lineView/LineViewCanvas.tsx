@@ -130,11 +130,14 @@ export function LineViewCanvas(props: LineViewProps) {
   const propsRef = useRef({ highlightDutyId, showDeadhead });
   propsRef.current = { highlightDutyId, showDeadhead };
 
-  // A new document means the camera should frame the whole line again.
+  // A new document means the camera should frame the whole line again — and
+  // *only* a new document. `markAllDirty` is depended on rather than `layers`
+  // because a resize must not throw away a camera the user has moved either.
+  const { markAllDirty } = layers;
   useEffect(() => {
     fitted.current = false;
-    layers.markAllDirty();
-  }, [generation, layers]);
+    markAllDirty();
+  }, [generation, markAllDirty]);
 
   // -- the frame --------------------------------------------------------------
   useEffect(() => {

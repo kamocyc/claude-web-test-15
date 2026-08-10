@@ -94,11 +94,15 @@ export function StringDiagramCanvas(props: StringDiagramProps) {
   const propsRef = useRef({ highlightDutyId, onSeek });
   propsRef.current = { highlightDutyId, onSeek };
 
+  // Only a change that invalidates the layout re-fits the camera. Depending on
+  // `layers` here re-ran this on every render, which meant the view snapped
+  // back to the fitted zoom about four times a second while the clock played.
+  const { markAllDirty } = layers;
   useEffect(() => {
     fitted.current = false;
     staticKey.current = '';
-    layers.markAllDirty();
-  }, [generation, verticalScale, showDeadhead, highlightDutyId, layers]);
+    markAllDirty();
+  }, [generation, verticalScale, showDeadhead, highlightDutyId, markAllDirty]);
 
   // -- the frame ------------------------------------------------------------
   useEffect(() => {
