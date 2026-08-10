@@ -110,7 +110,8 @@ describe('StringDiagramCanvas', () => {
     mount(<StringDiagramCanvas />);
     const marker = screen.getByTestId(TID.connectionMarker);
     expect(marker.getAttribute('data-station-id')).toBe(TOY.stationC);
-    expect(marker.getAttribute('data-transfer-sec')).toBe('120');
+    // 各101 arrives C 08:04:00, 急201 leaves 08:06:30.
+    expect(marker.getAttribute('data-transfer-sec')).toBe('150');
   });
 
   it('honours showDeadhead', () => {

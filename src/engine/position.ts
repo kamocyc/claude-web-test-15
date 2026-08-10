@@ -11,6 +11,7 @@ import type { Meters, Sec } from '@/domain/units';
 import {
   NO_DELAY,
   type DwellReason,
+  type LayoverPlan,
   type TimeOverlay,
   type TrainEvent,
   type TrainPhase,
@@ -24,6 +25,16 @@ const MPS_TO_KMH = 3.6;
 
 /** How close to a `pass` event counts as "通過中". */
 export const PASS_WINDOW_SEC = 6;
+
+/**
+ * How long a formation takes to change roads during a layover.
+ *
+ * A shunt to a 引上線 and back is a real move over real pointwork, so the view
+ * animates it over this window rather than snapping the marker sideways. Also
+ * read by `buildIndex`, which uses it to time the last berth of a layover — the
+ * stock has to be standing on the departure road before the departure.
+ */
+export const LAYOVER_SHUNT_SEC = 90;
 
 interface SegmentSolution {
   /** Physically impossible in the booked time — fall back to constant speed. */
@@ -167,6 +178,47 @@ function dwellReason(
   return 'passenger';
 }
 
+type LayoverPhase = Extract<TrainPhase, { phase: 'layover' }>;
+type PassingPhase = Extract<TrainPhase, { phase: 'passing' }>;
+
+/**
+ * Where the stock stands `t` seconds into a layover, and whether it is at that
+ * moment crossing from one road to another.
+ *
+ * The berth list is short (an arrival road, at most a 引上線, a departure road)
+ * so a linear scan is both the simplest and the fastest way to read it.
+ */
+function layoverPhase(plan: LayoverPlan, since: Sec, t: Sec): LayoverPhase {
+  let i = 0;
+  for (let j = 1; j < plan.berths.length; j++) {
+    if (plan.berths[j]!.from > t) break;
+    i = j;
+  }
+  const berth = plan.berths[i]!;
+  const phase: LayoverPhase = {
+    phase: 'layover',
+    stationId: plan.stationId,
+    km: plan.km,
+    since,
+    until: plan.untilSec,
+    nextTrainId: plan.nextTrainId,
+  };
+  if (berth.trackId !== undefined) phase.trackId = berth.trackId;
+
+  const prev = i > 0 ? plan.berths[i - 1] : undefined;
+  if (prev !== undefined && prev.trackId !== berth.trackId) {
+    // A layover shorter than the nominal shunt still has to finish the move
+    // before the successor leaves, so the window is whatever time is left.
+    const window = Math.min(LAYOVER_SHUNT_SEC, Math.max(1, plan.untilSec - berth.from));
+    const moved = t - berth.from;
+    if (moved < window) {
+      if (prev.trackId !== undefined) phase.fromTrackId = prev.trackId;
+      phase.shunt = moved <= 0 ? 0 : moved / window;
+    }
+  }
+  return phase;
+}
+
 /**
  * The runtime state of one train at time `t`.
  *
@@ -242,6 +294,14 @@ export function trainRuntimeAt(
     return out;
   }
   if (t > lastArr) {
+    // Terminating is not the same as vanishing: while the duty runs on into
+    // another train from this platform, the stock is still standing there.
+    const plan = tl.layover;
+    if (plan !== undefined && t < plan.untilSec) {
+      out.phase = layoverPhase(plan, lastArr, t);
+      out.km = plan.km;
+      return out;
+    }
     out.phase = { phase: 'finished' };
     out.km = last.km;
     return out;
@@ -268,11 +328,18 @@ export function trainRuntimeAt(
   setNext();
 
   // Inside this event's own window.
+  const nxt = i + 1 < n ? ev[i + 1]! : undefined;
   if (t <= curDep) {
     out.km = cur.km;
     if (cur.kind === 'pass') {
-      const phase: TrainPhase = { phase: 'passing', stationId: cur.stationId, km: cur.km };
+      const phase: PassingPhase = { phase: 'passing', stationId: cur.stationId, km: cur.km };
       if (cur.trackId !== undefined) phase.trackId = cur.trackId;
+      if (nxt !== undefined) {
+        phase.fromStationId = cur.stationId;
+        phase.toStationId = nxt.stationId;
+        if (cur.trackId !== undefined) phase.fromTrackId = cur.trackId;
+        if (nxt.trackId !== undefined) phase.toTrackId = nxt.trackId;
+      }
       out.phase = phase;
       return out;
     }
@@ -285,23 +352,6 @@ export function trainRuntimeAt(
       reason: dwellReason(tl.train.stops[cur.stopIndex], cur, doc),
     };
     if (cur.trackId !== undefined) phase.trackId = cur.trackId;
-    out.phase = phase;
-    return out;
-  }
-
-  // Just past a pass event, or just short of the next one.
-  const nxt = i + 1 < n ? ev[i + 1]! : undefined;
-  if (cur.kind === 'pass' && t - curDep <= PASS_WINDOW_SEC) {
-    out.km = cur.km;
-    const phase: TrainPhase = { phase: 'passing', stationId: cur.stationId, km: cur.km };
-    if (cur.trackId !== undefined) phase.trackId = cur.trackId;
-    out.phase = phase;
-    return out;
-  }
-  if (nxt !== undefined && nxt.kind === 'pass' && atOf(i + 1) - t <= PASS_WINDOW_SEC) {
-    out.km = nxt.km;
-    const phase: TrainPhase = { phase: 'passing', stationId: nxt.stationId, km: nxt.km };
-    if (nxt.trackId !== undefined) phase.trackId = nxt.trackId;
     out.phase = phase;
     return out;
   }
@@ -322,7 +372,33 @@ export function trainRuntimeAt(
   const travelled = interpolateKm(d, T, tau, tl.profile, cur.kind === 'stop', nxt.kind === 'stop');
   const km = cur.km + sign * travelled;
   out.km = km;
-  out.phase = {
+
+  // Just past a pass event, or just short of the next one. This only relabels
+  // the leg — the position stays the interpolated one, because snapping km to
+  // the station made the marker jump onto it, stand still for twelve seconds
+  // and jump off again.
+  const passed =
+    cur.kind === 'pass' && tau <= PASS_WINDOW_SEC
+      ? cur
+      : nxt.kind === 'pass' && nxtAt - t <= PASS_WINDOW_SEC
+        ? nxt
+        : undefined;
+  if (passed !== undefined) {
+    const phase: PassingPhase = {
+      phase: 'passing',
+      stationId: passed.stationId,
+      km,
+      fromStationId: cur.stationId,
+      toStationId: nxt.stationId,
+    };
+    if (passed.trackId !== undefined) phase.trackId = passed.trackId;
+    if (cur.trackId !== undefined) phase.fromTrackId = cur.trackId;
+    if (nxt.trackId !== undefined) phase.toTrackId = nxt.trackId;
+    out.phase = phase;
+    return out;
+  }
+
+  const running: Extract<TrainPhase, { phase: 'running' }> = {
     phase: 'running',
     fromStationId: cur.stationId,
     toStationId: nxt.stationId,
@@ -330,5 +406,8 @@ export function trainRuntimeAt(
     progress: T > 0 ? Math.max(0, Math.min(1, tau / T)) : 1,
     speedKmh: segmentSpeedKmh(d, T, tau, tl.profile, cur.kind === 'stop', nxt.kind === 'stop'),
   };
+  if (cur.trackId !== undefined) running.fromTrackId = cur.trackId;
+  if (nxt.trackId !== undefined) running.toTrackId = nxt.trackId;
+  out.phase = running;
   return out;
 }

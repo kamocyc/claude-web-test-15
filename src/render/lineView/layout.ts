@@ -26,6 +26,16 @@
  * `assignStationLanes`), which is why it can be pinned down in unit tests
  * rather than eyeballed.
  *
+ * ## The wiring is drawn, and the trains follow it
+ *
+ * A 番線 that is not the running lane is joined to the running lanes it serves
+ * by a **lead** at each end of the station block, and a depot's roads fan out
+ * of a **throat** off the main line. Those leads are not decoration: the same
+ * numbers place the trains, so a train entering the 待避線 swings out of the
+ * through road along the drawn turnout instead of changing lane in one frame,
+ * and a 回送 entering the yard runs down the throat onto its own road. Every
+ * position a marker can take is a point on a line this module also draws.
+ *
  * ## Label and marker placement
  *
  * The other half of this module is the *screen-space* geometry that keeps the
@@ -53,8 +63,33 @@ export const LANE_HEIGHT = 26;
  * view allows.
  */
 export const LABEL_BAND_LANES = 1.5;
-/** Blank world below the last lane, so a depot box is not flush with the edge. */
+/** Blank world below the last lane, so a yard is not flush with the edge. */
 export const BOTTOM_PAD_LANES = 0.6;
+/** Blank lanes between the running lines and a yard, and between two yards. */
+export const DEPOT_GAP_LANES = 0.5;
+
+/**
+ * How much of a station block each turnout lead takes, either end.
+ *
+ * Slightly over half, so a road that leaves the running lane and comes back
+ * has a short flat body in the middle — long enough to carry the road's name
+ * and to stand a train on without the marker sitting on a diagonal.
+ */
+export const LEAD_FRACTION = 0.55;
+
+/**
+ * Lane pitch inside a yard, in main-line lanes per road.
+ *
+ * 鷺沼車庫 has ten stabling roads. Drawn at the full lane pitch they would take
+ * more vertical space than the entire running railway, for 500 m of a 17 km
+ * line — so beyond a handful of roads a yard is packed tighter, and the pitch
+ * shrinks so that a yard of any size stays about four lanes deep. Nothing runs
+ * at speed in a yard and what sits on these lanes is a formation chip rather
+ * than a train marker, so the pitch only has to keep the roads apart.
+ */
+export function depotLanePitch(trackCount: number): number {
+  return trackCount <= 4 ? 1 : Math.max(0.3, 4 / trackCount);
+}
 
 export interface LaneCommon {
   index: number;
@@ -73,6 +108,11 @@ export interface StationTrackLane extends LaneCommon {
   canBeOvertaken: boolean;
   usage: StationTrack['usage'];
   directions: Direction[];
+  /** The flat body of the road; `[x0, bodyX0]` and `[bodyX1, x1]` are leads. */
+  bodyX0: Meters;
+  bodyX1: Meters;
+  /** Running lanes this road is connected to. Empty when it is one of them. */
+  leadLanes: number[];
 }
 
 export interface SectionLane extends LaneCommon {
@@ -84,18 +124,53 @@ export interface SectionLane extends LaneCommon {
   sectionIndex: number;
 }
 
-export interface DepotLane extends LaneCommon {
-  kind: 'depot';
+/** One road of a yard. Depot roads are lanes like any other. */
+export interface DepotTrackLane extends LaneCommon {
+  kind: 'depotTrack';
   depotId: DepotId;
   stationId: StationId;
-  attachedStationId: StationId;
-  trackIds: StationTrackId[];
-  /** Where the stub meets the main line. */
-  junctionX: Meters;
-  junctionLane: number;
+  trackId: StationTrackId;
+  usage: StationTrack['usage'];
 }
 
-export type Lane = StationTrackLane | SectionLane | DepotLane;
+/**
+ * A yard: the throat off the main line, the ladder, and one lane per road.
+ *
+ * Not a `Lane` itself — nothing is drawn *on* it. The depot's own roads are,
+ * and they are what a train or a stabled formation sits on.
+ */
+export interface DepotLane {
+  kind: 'depot';
+  depotId: DepotId;
+  /** The synthetic depot `Station`. */
+  stationId: StationId;
+  attachedStationId: StationId;
+  label: string;
+  /** The depot node's km — a routing fact the drawn geometry compresses. */
+  km: Meters;
+  /** Where the throat leaves the main line: the edge of the attached block. */
+  junctionX: Meters;
+  /** Where the throat fans out. */
+  rootX: Meters;
+  rootLane: number;
+  /** Where the roads become parallel. */
+  throatX: Meters;
+  /** The far end of the yard. */
+  endX: Meters;
+  /** Where a formation stands: the middle of a road's flat body. */
+  berthX: Meters;
+  x0: Meters;
+  x1: Meters;
+  tracks: DepotTrackLane[];
+  /** Lane for stock whose road the plan does not name — the yard lead. */
+  leadLane: number;
+  laneFrom: number;
+  laneTo: number;
+  /** Lanes per road. See `depotLanePitch`. */
+  lanePitch: number;
+}
+
+export type Lane = StationTrackLane | SectionLane | DepotTrackLane;
 
 export interface StationLayout {
   stationId: StationId;
@@ -128,7 +203,7 @@ export interface LineLayout {
   laneHeight: number;
   /** Lanes of the running line plus every station's 番線. */
   mainLaneCount: number;
-  /** Including depot stub lanes. */
+  /** Including every yard road. Fractional, because yard lanes are packed. */
   totalLaneCount: number;
   laneDown: number;
   laneUp: number;
@@ -140,7 +215,21 @@ export interface LineLayout {
   depotLaneOfStation: Map<StationId, DepotLane>;
   /** Half the world width of a station block. */
   stationHalfWidth: Meters;
+  /** World length of one turnout lead, either end of a station block. */
+  stationLeadWidth: Meters;
+  /** Everything there is: what panning and zooming is allowed to reach. */
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
+  /**
+   * What the camera frames when the view opens.
+   *
+   * Not the same rectangle. A line with two yards has half again as many lanes
+   * as it has running roads, and fitting all of them would shrink the railway
+   * itself to make room for stabling roads nobody has asked to look at yet. So
+   * the opening shot is the running line plus the head of the first yard, and
+   * the rest is a scroll away — the same progressive-disclosure bargain the
+   * station-name band already makes.
+   */
+  fitBounds: { minX: number; maxX: number; minY: number; maxY: number };
 }
 
 export interface LineLayoutOptions {
@@ -265,11 +354,34 @@ export function computeStationHalfWidth(
  * 長津田車両工場 sits at km 30 off a 16.9 km line purely so that 重要部検査
  * moves have somewhere to go. Fitting the camera to that squeezes the entire
  * line into half the canvas for the sake of a node no train ever reaches, so
- * the drawn stub is capped. The cap is generous enough that a genuinely short
- * stub (a yard just beyond the terminus) is still drawn at its true length.
+ * the drawn stub is capped.
  */
 export function depotStubCap(lineSpan: Meters, halfWidth: Meters): Meters {
-  return Math.max(halfWidth * 6, lineSpan * 0.06, 200);
+  return Math.max(halfWidth * 6, lineSpan * 0.16, 200);
+}
+
+/**
+ * How long a yard is *drawn*, given how long it really is.
+ *
+ * Capped at the top for the reason above, and floored at the bottom for the
+ * mirror-image reason: 鷺沼車庫 is 500 m off a 17 km line, which is 3% of the
+ * width — a ladder of ten roads inside 25 px is a smear, not a track layout.
+ *
+ * So a yard is drawn **schematically**: long enough for its roads to read as
+ * roads and to be zoomed into, short enough not to dominate the line. This is
+ * the one place the km axis is knowingly not to scale, and it is the same
+ * bargain the cap already makes at the other end — with the difference that
+ * `placeTrain` maps km onto the drawn stub, so a 回送 into the yard still
+ * arrives exactly when the timetable says it does.
+ */
+export function depotStubReach(
+  trueReach: Meters,
+  lineSpan: Meters,
+  halfWidth: Meters,
+): Meters {
+  const cap = depotStubCap(lineSpan, halfWidth);
+  const floor = Math.min(cap, Math.max(halfWidth * 3, lineSpan * 0.14));
+  return Math.min(Math.max(trueReach, floor), cap);
 }
 
 /**
@@ -326,6 +438,7 @@ export function computeLineLayout(
   const laneHeight = opts.laneHeight ?? LANE_HEIGHT;
   const ordered = orderedStations(doc);
   const halfWidth = opts.stationHalfWidth ?? computeStationHalfWidth(ordered);
+  const leadWidth = halfWidth * LEAD_FRACTION;
 
   let maxTracks = 0;
   for (const s of ordered) maxTracks = Math.max(maxTracks, s.trackIds.length);
@@ -350,11 +463,22 @@ export function computeLineLayout(
     for (const t of tracks) {
       const index = assignment.get(t.id) ?? 0;
       laneOfTrack.set(t.id, index);
+      // Which running lanes this road is switched into. A road sitting on the
+      // running lane it serves needs no lead: it *is* the through road.
+      const leadLanes: number[] = [];
+      for (const d of t.directions) {
+        const running = d === 'down' ? laneDown : laneUp;
+        if (running !== index && !leadLanes.includes(running)) leadLanes.push(running);
+      }
+      const inset = leadLanes.length > 0 ? leadWidth : 0;
       const lane: StationTrackLane = {
         kind: 'stationTrack',
         index,
         x0,
         x1,
+        bodyX0: x0 + inset,
+        bodyX1: x1 - inset,
+        leadLanes,
         label: t.name,
         stationId: station.id,
         trackId: t.id,
@@ -451,45 +575,87 @@ export function computeLineLayout(
     minX = 0;
     maxX = 1000;
   }
-  const stubCap = depotStubCap(maxX - minX, halfWidth);
+  const lineSpan = maxX - minX;
 
-  // -- depot stubs ----------------------------------------------------------
+  // -- yards ----------------------------------------------------------------
+  // A depot is a fan of roads off the running line, not a box: its throat
+  // leaves the main line at the edge of the attached station's block, opens
+  // into a ladder, and every stabling road gets a lane of its own so a
+  // formation can be drawn on the road the plan actually berths it on.
   const depots: DepotLane[] = [];
   const depotLaneOfStation = new Map<StationId, DepotLane>();
-  const depotEntities = entityList(doc.depots);
-  depotEntities.forEach((depot, i) => {
+  let nextFreeLane = mainLaneCount;
+  let maxLane = mainLaneCount - 1;
+
+  for (const depot of entityList(doc.depots)) {
     const depotStation = doc.stations.byId[depot.stationId];
     const attached = stationOf.get(depot.attachedStationId);
-    const junctionX = attached?.x ?? 0;
-    const trueX = depotStation?.kmFromOrigin ?? junctionX + (depot.stubOffsetMeters || -500);
-    const outward = trueX < junctionX ? -1 : 1;
-    // Capped, but never shorter than the true stub: a 500 m yard stays 500 m.
-    const reach = Math.min(Math.abs(trueX - junctionX), stubCap);
-    const depotX = junctionX + outward * reach;
-    const trackIds = depotStation?.trackIds ?? [];
-    const index = mainLaneCount + i;
-    const lane: DepotLane = {
+    const centreX = attached?.x ?? 0;
+    const km = depotStation?.kmFromOrigin ?? centreX + (depot.stubOffsetMeters || -500);
+    const outward = km < centreX ? -1 : 1;
+    const junctionX = centreX + outward * halfWidth;
+    const reach = depotStubReach(Math.abs(km - centreX), lineSpan, halfWidth);
+    const endX = centreX + outward * reach;
+    // Lead, then ladder, then the roads themselves. The lead gets the largest
+    // share: it is a single track, and it is the bit a train is drawn moving
+    // along on its way in and out.
+    const stubLen = Math.abs(endX - junctionX);
+    const rootX = junctionX + outward * stubLen * 0.45;
+    const throatX = junctionX + outward * stubLen * 0.6;
+
+    const tracks = tracksOfStation(doc, depot.stationId);
+    const pitch = depotLanePitch(tracks.length);
+    const laneFrom = nextFreeLane + DEPOT_GAP_LANES;
+    const rootLane = laneFrom - DEPOT_GAP_LANES / 2;
+
+    const trackLanes: DepotTrackLane[] = tracks.map((t, i) => {
+      const index = laneFrom + i * pitch;
+      laneOfTrack.set(t.id, index);
+      return {
+        kind: 'depotTrack',
+        index,
+        x0: Math.min(rootX, endX),
+        x1: Math.max(rootX, endX),
+        label: t.name,
+        depotId: depot.id,
+        stationId: depot.stationId,
+        trackId: t.id,
+        usage: t.usage,
+      };
+    });
+    for (const lane of trackLanes) lanes.push(lane);
+
+    const laneTo = trackLanes.length > 0 ? trackLanes[trackLanes.length - 1]!.index : laneFrom;
+    const yard: DepotLane = {
       kind: 'depot',
-      index,
-      x0: Math.min(depotX, junctionX),
-      x1: Math.max(depotX, junctionX),
-      label: depot.name,
       depotId: depot.id,
       stationId: depot.stationId,
       attachedStationId: depot.attachedStationId,
-      trackIds: [...trackIds],
+      label: depot.name,
+      km,
       junctionX,
-      junctionLane: outward < 0 ? laneDown : laneUp,
+      rootX,
+      rootLane,
+      throatX,
+      endX,
+      berthX: (throatX + endX) / 2,
+      x0: Math.min(endX, junctionX),
+      x1: Math.max(endX, junctionX),
+      tracks: trackLanes,
+      leadLane: rootLane,
+      laneFrom,
+      laneTo,
+      lanePitch: pitch,
     };
-    for (const tid of trackIds) laneOfTrack.set(tid, index);
-    depots.push(lane);
-    lanes.push(lane);
-    depotLaneOfStation.set(depot.stationId, lane);
-    minX = Math.min(minX, lane.x0);
-    maxX = Math.max(maxX, lane.x1);
-  });
+    depots.push(yard);
+    depotLaneOfStation.set(depot.stationId, yard);
+    minX = Math.min(minX, yard.x0);
+    maxX = Math.max(maxX, yard.x1);
+    maxLane = Math.max(maxLane, laneTo);
+    nextFreeLane = laneTo + 1;
+  }
 
-  const totalLaneCount = mainLaneCount + depots.length;
+  const totalLaneCount = maxLane + 1;
 
   return {
     laneHeight,
@@ -504,6 +670,7 @@ export function computeLineLayout(
     depots,
     depotLaneOfStation,
     stationHalfWidth: halfWidth,
+    stationLeadWidth: leadWidth,
     // The label band and the bottom gutter are part of the world, so the
     // camera fit reserves room for station names instead of the draw code
     // having to sneak them into a margin the camera does not know about.
@@ -512,6 +679,12 @@ export function computeLineLayout(
       maxX,
       minY: -LABEL_BAND_LANES,
       maxY: totalLaneCount + BOTTOM_PAD_LANES,
+    },
+    fitBounds: {
+      minX,
+      maxX,
+      minY: -LABEL_BAND_LANES,
+      maxY: Math.min(totalLaneCount + BOTTOM_PAD_LANES, mainLaneCount + 1),
     },
   };
 }
@@ -536,9 +709,17 @@ export function runningLane(layout: LineLayout, direction: Direction): number {
  * Where to draw a train.
  *
  * A train standing on an assigned 番線 uses that track's lane — which is how a
- * 待避 becomes visible as a vertical displacement. Everything else falls back
- * to the running lane for its direction, and anything touching a depot station
- * falls onto that depot's stub lane.
+ * 待避 becomes visible as a vertical displacement. A train *between* two stops
+ * is placed on the polyline that joins the road it left to the road it is
+ * heading for, through the running lane in between: the same leads the static
+ * layer draws. That is what stops a train from changing lane in a single frame
+ * at the departure instant, and what makes a 出庫回送 come up the yard throat
+ * instead of sliding along the bottom of the picture.
+ *
+ * The x axis is remapped the same way. A depot node's km is a routing fact —
+ * 長津田車両工場 sits at km 30 off a 17 km line — so a leg that touches a yard
+ * maps km linearly onto the *drawn* stub. Otherwise a 回送 to the works would
+ * fly off the end of the line while its yard stayed where it was drawn.
  */
 export interface PlaceTrainArgs {
   km: Meters;
@@ -547,6 +728,127 @@ export interface PlaceTrainArgs {
   stationId?: StationId | undefined;
   fromStationId?: StationId | undefined;
   toStationId?: StationId | undefined;
+  fromTrackId?: StationTrackId | undefined;
+  toTrackId?: StationTrackId | undefined;
+  /** 0..1 across a shunt from `fromTrackId` onto `trackId`, at one station. */
+  trackBlend?: number | undefined;
+}
+
+/**
+ * One end of a leg: where it sits, and how the wiring leaves it.
+ *
+ * `off[i]`/`lane[i]` is a polyline in "distance from the anchor towards the
+ * other end" — `off[0]` is always 0. Fixed-size and reused, because the
+ * dynamic layer resolves this for every train on every frame.
+ */
+interface EndKnots {
+  x: number;
+  km: number;
+  n: number;
+  reach: number;
+  off: Float64Array;
+  lane: Float64Array;
+}
+
+function emptyKnots(): EndKnots {
+  return { x: 0, km: 0, n: 1, reach: 0, off: new Float64Array(4), lane: new Float64Array(4) };
+}
+
+/** Reusable solver buffers — see the note on allocation above. */
+const endA = emptyKnots();
+const endB = emptyKnots();
+
+/** The lane a train standing at `stationId` on `trackId` occupies. */
+function standingLane(
+  layout: LineLayout,
+  stationId: StationId | undefined,
+  trackId: StationTrackId | undefined,
+  direction: Direction,
+): number {
+  if (trackId !== undefined) {
+    const lane = layout.laneOfTrack.get(trackId);
+    if (lane !== undefined) return lane;
+  }
+  if (stationId !== undefined) {
+    const yard = layout.depotLaneOfStation.get(stationId);
+    if (yard !== undefined) return yard.leadLane;
+    const station = layout.stationOf.get(stationId);
+    if (station) {
+      for (const l of station.trackLanes) {
+        if (l.directions.includes(direction)) return l.index;
+      }
+      if (station.trackLanes.length > 0) return station.trackLanes[0]!.index;
+    }
+  }
+  return runningLane(layout, direction);
+}
+
+/** Drawn x of a train standing at a station, which is not always its km. */
+function standingX(
+  layout: LineLayout,
+  stationId: StationId | undefined,
+  fallbackKm: Meters,
+): Meters {
+  if (stationId === undefined) return fallbackKm;
+  const yard = layout.depotLaneOfStation.get(stationId);
+  if (yard !== undefined) return yard.berthX;
+  return layout.stationOf.get(stationId)?.x ?? fallbackKm;
+}
+
+/** Fill `out` with the geometry of one end of a leg. */
+function resolveEnd(
+  layout: LineLayout,
+  stationId: StationId | undefined,
+  trackId: StationTrackId | undefined,
+  direction: Direction,
+  fallbackKm: Meters,
+  out: EndKnots,
+): EndKnots {
+  const running = runningLane(layout, direction);
+  const yard = stationId === undefined ? undefined : layout.depotLaneOfStation.get(stationId);
+  if (yard !== undefined) {
+    const lane = standingLane(layout, stationId, trackId, direction);
+    out.x = yard.berthX;
+    out.km = yard.km;
+    out.off[0] = 0;
+    out.lane[0] = lane;
+    out.off[1] = Math.abs(yard.berthX - yard.throatX);
+    out.lane[1] = lane;
+    out.off[2] = Math.abs(yard.berthX - yard.rootX);
+    out.lane[2] = yard.rootLane;
+    out.off[3] = Math.abs(yard.berthX - yard.junctionX);
+    out.lane[3] = running;
+    out.n = 4;
+    out.reach = out.off[3]!;
+    return out;
+  }
+
+  const station = stationId === undefined ? undefined : layout.stationOf.get(stationId);
+  const lane = standingLane(layout, stationId, trackId, direction);
+  out.x = station?.x ?? fallbackKm;
+  out.km = station?.km ?? fallbackKm;
+  out.off[0] = 0;
+  out.lane[0] = lane;
+  out.off[1] = layout.stationHalfWidth - layout.stationLeadWidth;
+  out.lane[1] = lane;
+  out.off[2] = layout.stationHalfWidth;
+  out.lane[2] = running;
+  out.n = 3;
+  out.reach = out.off[2]!;
+  return out;
+}
+
+/** The polyline of `k`, `o` metres from its anchor. */
+function laneAtOffset(k: EndKnots, o: number): number {
+  if (o <= 0) return k.lane[0]!;
+  for (let i = 1; i < k.n; i++) {
+    const a = k.off[i - 1]!;
+    const b = k.off[i]!;
+    if (o > b) continue;
+    if (b <= a) return k.lane[i]!;
+    return k.lane[i - 1]! + (k.lane[i]! - k.lane[i - 1]!) * ((o - a) / (b - a));
+  }
+  return k.lane[k.n - 1]!;
 }
 
 export function placeTrain(layout: LineLayout, args: PlaceTrainArgs): TrainPlacement {
@@ -566,38 +868,56 @@ export function placeTrainInto(
   out: TrainPlacement,
 ): TrainPlacement {
   const { km, direction, trackId, stationId, fromStationId, toStationId } = args;
-  out.x = km;
 
-  if (trackId !== undefined) {
-    const lane = layout.laneOfTrack.get(trackId);
-    if (lane !== undefined) {
-      out.lane = lane;
-      return out;
-    }
+  if (fromStationId !== undefined && toStationId !== undefined) {
+    return placeOnLeg(layout, args, out);
   }
 
-  const depotLane =
-    (stationId !== undefined ? layout.depotLaneOfStation.get(stationId) : undefined) ??
-    (fromStationId !== undefined ? layout.depotLaneOfStation.get(fromStationId) : undefined) ??
-    (toStationId !== undefined ? layout.depotLaneOfStation.get(toStationId) : undefined);
-  if (depotLane) {
-    out.lane = depotLane.index;
+  out.x = standingX(layout, stationId, km);
+  out.lane = standingLane(layout, stationId, trackId, direction);
+
+  // Mid-shunt: crossing from one road to another without leaving the station.
+  const blend = args.trackBlend;
+  if (blend !== undefined && args.fromTrackId !== undefined) {
+    const from = layout.laneOfTrack.get(args.fromTrackId);
+    if (from !== undefined) {
+      const f = blend < 0 ? 0 : blend > 1 ? 1 : blend;
+      out.lane = from + (out.lane - from) * f;
+    }
+  }
+  return out;
+}
+
+/** Place a train running between two stops, along the drawn wiring. */
+function placeOnLeg(
+  layout: LineLayout,
+  args: PlaceTrainArgs,
+  out: TrainPlacement,
+): TrainPlacement {
+  const { km, direction } = args;
+  resolveEnd(layout, args.fromStationId, args.fromTrackId, direction, km, endA);
+  resolveEnd(layout, args.toStationId, args.toTrackId, direction, km, endB);
+
+  const dkm = endB.km - endA.km;
+  const progress = dkm === 0 ? 0 : (km - endA.km) / dkm;
+  const clamped = progress < 0 ? 0 : progress > 1 ? 1 : progress;
+  const dx = endB.x - endA.x;
+  const x = endA.x + dx * clamped;
+  out.x = x;
+
+  const span = Math.abs(dx);
+  const need = endA.reach + endB.reach;
+  if (span === 0 || need <= 0) {
+    out.lane = endA.lane[0]!;
     return out;
   }
-
-  if (stationId !== undefined) {
-    const station = layout.stationOf.get(stationId);
-    if (station && station.trackLanes.length > 0) {
-      for (const l of station.trackLanes) {
-        if (l.directions.includes(direction)) {
-          out.lane = l.index;
-          return out;
-        }
-      }
-    }
-  }
-
-  out.lane = runningLane(layout, direction);
+  // A leg shorter than the two ends' wiring squeezes both of them in
+  // proportion, so the polyline stays continuous and monotone.
+  const squeeze = need > span ? span / need : 1;
+  const u = Math.abs(x - endA.x);
+  if (u <= endA.reach * squeeze) out.lane = laneAtOffset(endA, u / squeeze);
+  else if (span - u <= endB.reach * squeeze) out.lane = laneAtOffset(endB, (span - u) / squeeze);
+  else out.lane = runningLane(layout, direction);
   return out;
 }
 
@@ -959,53 +1279,54 @@ export function resolveMarkerSlots(
 // Depot box
 // ---------------------------------------------------------------------------
 
-export const DEPOT_BOX_MIN_W = 112;
-export const DEPOT_BOX_MAX_W = 248;
-/** Below this width the box only has room for the name and the count. */
-export const DEPOT_BOX_CODES_W = 176;
+// ---------------------------------------------------------------------------
+// Depot name plate
+// ---------------------------------------------------------------------------
 
-export interface DepotBox {
+export const DEPOT_PLATE_H = 15;
+export const DEPOT_PLATE_PAD = 6;
+
+export interface DepotPlate {
   x: number;
   y: number;
   w: number;
   h: number;
-  /** +1 when the depot lies beyond the junction, -1 when before it. */
+  /** +1 when the yard lies beyond the junction, -1 when before it. */
   outward: number;
-  /** Whether the box is wide enough to list formation codes. */
-  showCodes: boolean;
 }
 
 /**
- * The depot's box, in screen pixels.
+ * The plate carrying a yard's name and how much is stabled in it.
  *
- * Deliberately *not* a world-space rectangle. 鷺沼車庫's stub is 500 m and
- * 長津田車両工場's is capped at ~1 km, which at the fitted zoom is 37 px and
- * 76 px — a box drawn to scale would be an illegible sliver and a wide empty
- * bar respectively. Instead the box is a fixed minimum size anchored to the
- * end of the stub, and it *grows* with the stub as the user zooms in, gaining
- * room for the formation codes once it is wide enough to hold them.
+ * It used to be a box big enough to list the formations, drawn *over* the
+ * stub — which is precisely why the yard's roads were invisible. Now the roads
+ * are the drawing and the plate is a caption: it sits above the first road,
+ * hangs off the outer end of the yard so it never covers the throat, and is
+ * only as wide as its text.
+ *
+ * Screen pixels rather than world space, because 鷺沼車庫's 500 m stub is 37 px
+ * at the fitted zoom and a label drawn to scale would be an illegible sliver.
  */
-export function depotBoxLayout(args: {
-  /** Screen x where the stub leaves the main line. */
+export function depotPlateLayout(args: {
+  /** Screen x where the throat leaves the main line. */
   junctionX: number;
-  /** Screen x of the far end of the stub. */
+  /** Screen x of the far end of the yard. */
   stubEndX: number;
-  /** Screen y of the depot lane's centre. */
+  /** Screen y the plate is centred on. */
   centerY: number;
-  laneHeight: number;
+  /** Measured width of the text the plate has to hold. */
+  contentWidth: number;
   viewportWidth: number;
-}): DepotBox {
-  const { junctionX, stubEndX, centerY, laneHeight, viewportWidth } = args;
+}): DepotPlate {
+  const { junctionX, stubEndX, centerY, contentWidth, viewportWidth } = args;
   const outward = stubEndX < junctionX ? -1 : 1;
-  const room = Math.abs(stubEndX - junctionX);
-  const w = Math.max(DEPOT_BOX_MIN_W, Math.min(DEPOT_BOX_MAX_W, room));
-  const h = Math.max(24, Math.min(38, laneHeight - 6));
+  const w = Math.max(32, contentWidth + DEPOT_PLATE_PAD * 2);
 
-  // Anchored to the stub end and grown back towards the junction, so the box
-  // is always attached to the thing it labels and never hangs off the edge.
+  // Anchored to the outer end and grown back towards the junction, so the
+  // plate is always attached to the thing it labels.
   let x = outward < 0 ? stubEndX : stubEndX - w;
   const limit = viewportWidth - w - 4;
   if (limit > 4) x = Math.max(4, Math.min(limit, x));
 
-  return { x, y: centerY - h / 2, w, h, outward, showCodes: w >= DEPOT_BOX_CODES_W && h >= 28 };
+  return { x, y: centerY - DEPOT_PLATE_H / 2, w, h: DEPOT_PLATE_H, outward };
 }

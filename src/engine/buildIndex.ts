@@ -11,9 +11,10 @@ import {
   type FormationId,
   type LinkId,
   type PerfProfileId,
+  type StationTrackId,
   type TrainId,
 } from '@/domain/ids';
-import type { LinkRunTime, PerfProfile, ProjectDocument } from '@/domain/model';
+import type { Duty, LinkRunTime, PerfProfile, ProjectDocument } from '@/domain/model';
 import {
   stationKmMap,
   trainDistance,
@@ -24,7 +25,8 @@ import {
 import { entityList, type IsoDate } from '@/domain/units';
 import { buildTrackIntervals } from './occupancy';
 import { detectConnections, detectOvertakes } from './overtake';
-import type { TimetableIndex, TrainEvent, TrainTimeline } from './types';
+import { LAYOVER_SHUNT_SEC } from './position';
+import type { LayoverBerth, TimetableIndex, TrainEvent, TrainTimeline } from './types';
 
 const BUCKET_SEC = 60;
 
@@ -36,6 +38,90 @@ const FALLBACK_PROFILE: PerfProfile = {
   decelKmhps: 3.5,
   maxSpeedKmh: 100,
 };
+
+/**
+ * Append a berth, unless the stock is already standing on that road — or the
+ * road is unknown, in which case "somewhere at this station" is all anyone
+ * knows and moving the marker would be inventing a fact.
+ */
+function pushBerth(
+  berths: LayoverBerth[],
+  from: number,
+  trackId: StationTrackId | undefined,
+): void {
+  const last = berths[berths.length - 1]!;
+  if (trackId === undefined || last.trackId === trackId) return;
+  berths.push({ from: Math.max(from, last.from), trackId });
+}
+
+/**
+ * Link each train of a duty to the one its stock forms next.
+ *
+ * A 折り返し is the commonest thing a terminating train does, and until now the
+ * view had no way to know about it: the arriving train ended, the departing
+ * train had not begun, and for those minutes the formation existed nowhere. The
+ * duty is the only place that fact lives, so it is read here, once, into the
+ * timeline — `trainRuntimeAt` stays a pure function of one train's own data.
+ *
+ * Only a successor that starts where the predecessor ended counts. Anything
+ * else means the stock got there some way the document does not describe, and
+ * drawing a train standing at a platform it never reached would be a fiction.
+ */
+function attachLayovers(
+  duty: Duty,
+  timelines: Map<TrainId, TrainTimeline>,
+): void {
+  const legs = duty.legs;
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i]!;
+    if (leg.kind !== 'train') continue;
+    let j = i + 1;
+    while (j < legs.length && legs[j]!.kind !== 'train') j++;
+    const nextLeg = legs[j];
+    if (nextLeg === undefined || nextLeg.kind !== 'train') continue;
+
+    const tl = timelines.get(leg.trainId);
+    const nextTl = timelines.get(nextLeg.trainId);
+    if (tl === undefined || nextTl === undefined) continue;
+    const arrive = tl.events[tl.events.length - 1];
+    const depart = nextTl.events[0];
+    if (arrive === undefined || depart === undefined) continue;
+    if (arrive.stationId !== depart.stationId) continue;
+
+    const from = arrive.arr ?? arrive.at;
+    const until = depart.dep ?? depart.at;
+    if (!(until > from)) continue;
+
+    const first: LayoverBerth = { from };
+    if (arrive.trackId !== undefined) first.trackId = arrive.trackId;
+    const berths: LayoverBerth[] = [first];
+
+    // A long turnback is shunted clear of the platform, and the duty says so.
+    let clearAt: number | undefined;
+    for (let k = i + 1; k < j; k++) {
+      const between = legs[k]!;
+      if (between.kind !== 'stable' || between.stationId !== arrive.stationId) continue;
+      pushBerth(berths, Math.min(Math.max(between.from, from), until), between.trackId);
+      clearAt = Math.min(Math.max(between.to, from), until);
+    }
+    // Whatever happened in between, it has to be back on the departure road
+    // before it leaves — never later than one shunt short of the departure.
+    pushBerth(berths, Math.min(clearAt ?? until, until - LAYOVER_SHUNT_SEC), depart.trackId);
+
+    tl.layover = {
+      untilSec: until,
+      stationId: arrive.stationId,
+      km: arrive.km,
+      berths,
+      nextTrainId: nextTl.trainId,
+    };
+  }
+}
+
+/** The last moment a train is still drawn — its arrival, or its layover. */
+function drawnUntil(tl: TrainTimeline): number {
+  return tl.layover === undefined ? tl.endSec : Math.max(tl.endSec, tl.layover.untilSec);
+}
 
 /** The day type in force on `date`, falling back to the active one. */
 export function dayTypeIdFor(doc: ProjectDocument, date: IsoDate): DayTypeId {
@@ -127,10 +213,16 @@ export function buildIndex(doc: ProjectDocument, date?: IsoDate): TimetableIndex
     .sort((a, b) => a.startSec - b.startSec || a.trainId.localeCompare(b.trainId))
     .map((tl) => tl.trainId);
 
+  // -- 折り返し / 入換 between two trains of one duty -------------------------
+  for (const duty of entityList(doc.duties)) {
+    if (!duty.dayTypeIds.includes(dayTypeId)) continue;
+    attachLayovers(duty, timelines);
+  }
+
   // -- activity buckets -----------------------------------------------------
   const bucketStartSec = doc.settings.serviceDayStartSec;
   let maxEnd = doc.settings.serviceDayEndSec;
-  for (const tl of timelines.values()) maxEnd = Math.max(maxEnd, tl.endSec);
+  for (const tl of timelines.values()) maxEnd = Math.max(maxEnd, drawnUntil(tl));
   const bucketCount = Math.max(1, Math.floor((maxEnd - bucketStartSec) / BUCKET_SEC) + 1);
   const activeByMinute: TrainId[][] = Array.from({ length: bucketCount }, () => []);
   const bucketOf = (t: number): number => {
@@ -140,7 +232,9 @@ export function buildIndex(doc: ProjectDocument, date?: IsoDate): TimetableIndex
   for (const trainId of orderedTrainIds) {
     const tl = timelines.get(trainId)!;
     const lo = bucketOf(tl.startSec);
-    const hi = bucketOf(tl.endSec);
+    // A train stays in the bucket list through its layover: it is still on
+    // screen, standing at the platform as the next train's stock.
+    const hi = bucketOf(drawnUntil(tl));
     for (let i = lo; i <= hi; i++) activeByMinute[i]!.push(trainId);
   }
 

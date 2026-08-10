@@ -10,7 +10,7 @@ exports[`digest positions > places active trains on the now-line at their curren
   {
     "id": "trn-2",
     "sx": 240,
-    "sy": 144,
+    "sy": 146,
   },
 ]
 `;
@@ -51,7 +51,7 @@ exports[`drawDiagramDynamic > draws the now-line and one dot per active train 1`
   "stroke()",
   "set fillStyle("#dc2626")",
   "beginPath()",
-  "arc(240, 144, 4, 0, 6.283)",
+  "arc(240, 146.071, 4, 0, 6.283)",
   "fill()",
   "stroke()",
 ]
@@ -75,8 +75,8 @@ exports[`drawDiagramEvents > draws a diamond at the 待避 and a bracket at the 
   "beginPath()",
   "moveTo(228, 202)",
   "lineTo(228, 208)",
-  "lineTo(252, 208)",
-  "lineTo(252, 202)",
+  "lineTo(258, 208)",
+  "lineTo(258, 202)",
   "stroke()",
 ]
 `;

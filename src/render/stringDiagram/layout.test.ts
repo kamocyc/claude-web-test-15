@@ -133,9 +133,11 @@ describe('computeDiagramLayout — events', () => {
   it('spans the connection bracket over the transfer window', () => {
     expect(layout.connections).toHaveLength(1);
     const c = layout.connections[0]!;
+    // Arrival of the 各停 to *departure* of the 急行: 08:04:00 → 08:06:30 is
+    // the time a passenger actually has to change trains.
     expect(c.x).toBe(8 * H + 4 * M);
-    expect(c.x2).toBe(8 * H + 6 * M);
-    expect(c.transferSec).toBe(120);
+    expect(c.x2).toBe(8 * H + 6 * M + 30);
+    expect(c.transferSec).toBe(150);
   });
 });
 

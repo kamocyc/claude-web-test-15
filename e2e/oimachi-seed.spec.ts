@@ -148,6 +148,53 @@ test.describe('東急大井町線 sample', () => {
     expect(late.some((r) => !earlyIds.has(r.trainId))).toBe(true);
   });
 
+  test('a formation never disappears while its duty is running', async ({ page }) => {
+    // The 大井町 stub terminal turns every up train back as a down one, and
+    // 溝の口 shunts the long layovers into a 引上線. Through all of it the
+    // stock has to stay on screen: it used to blink out at the arrival and
+    // reappear minutes later as the next train, which reads as a vanishing
+    // vehicle and then a teleporting one.
+    const sim = new Simulator(page);
+    await sim.line.open();
+
+    await sim.line.seek(T_PEAK);
+    const lastKm = new Map<string, number>();
+    for (const row of await sim.line.rows()) {
+      if (row.formation !== '') lastKm.set(row.formation, row.km);
+    }
+    expect(lastKm.size).toBeGreaterThan(8);
+
+    // Step through a whole turnback cycle. A formation may finish for the day
+    // and go home, but it must never blink out and come back — that gap is
+    // the bug, and the reappearance is what makes it unmistakable.
+    const gone = new Set<string>();
+    const turnedBack = new Set<string>();
+    for (let step = 0; step < 12; step++) {
+      await sim.line.advance(60);
+      const rows = await sim.line.rows();
+      const now = new Map<string, { km: number; reason: string }>();
+      for (const row of rows) {
+        if (row.formation === '') continue;
+        expect(now.has(row.formation), `${row.formation} drawn twice`).toBe(false);
+        now.set(row.formation, { km: row.km, reason: row.reason });
+        if (row.reason === 'turnback') turnedBack.add(row.formation);
+      }
+      for (const code of lastKm.keys()) {
+        const here = now.get(code);
+        if (here === undefined) {
+          gone.add(code);
+          continue;
+        }
+        expect(gone.has(code), `${code} vanished and came back`).toBe(false);
+        // A minute of railway is at most ~2 km, so a bigger step is a jump.
+        expect(Math.abs(here.km - lastKm.get(code)!), `${code} jumped`).toBeLessThan(2.5);
+        lastKm.set(code, here.km);
+      }
+    }
+    // …and the window really did contain turnbacks, so the above is not vacuous.
+    expect(turnedBack.size, 'no formation turned back in twelve minutes').toBeGreaterThan(0);
+  });
+
   test('playing at speed changes the active set', async ({ page }) => {
     const sim = new Simulator(page);
     await sim.line.open();
