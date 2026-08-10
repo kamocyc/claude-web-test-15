@@ -158,6 +158,36 @@ describe('種別ごとの停車パターン', () => {
     }
   });
 
+  it('turns every 大井町線 train on the 大井町線 faces at 溝の口', () => {
+    // 1・4番線 belong to the 田園都市線, whose own trains this document does not
+    // model: they only *look* free. Stock that starts or ends its run at 溝の口
+    // stands on 2・3番線 — whichever pair of rails it ran in on, since the 青各停
+    // uses the outer pair to reach 二子新地 and 高津 — and everything that runs
+    // through is on the 田園都市線 beyond the station, so it uses 1・4.
+    const face = (t: Train, i: number): string => track(t.stops[i]!.trackId!).name;
+    const OM = ['2番線', '3番線'];
+    const DT = ['1番線', '4番線'];
+
+    let turning = 0;
+    let through = 0;
+    for (const train of trains) {
+      train.stops.forEach((stop, i) => {
+        if (stop.stationId !== MIZONOKUCHI.id) return;
+        const name = face(train, i);
+        if (name.startsWith('引上')) return;
+        if (i === 0 || i === train.stops.length - 1) {
+          turning++;
+          expect(OM, `${train.number} @ 溝の口`).toContain(name);
+        } else {
+          through++;
+          expect(DT, `${train.number} @ 溝の口`).toContain(name);
+        }
+      });
+    }
+    expect(turning).toBeGreaterThan(100);
+    expect(through).toBeGreaterThan(100);
+  });
+
   it('books no passenger stop on a 通過線', () => {
     for (const train of service) {
       for (const stop of train.stops) {
@@ -398,6 +428,30 @@ describe('運用と編成', () => {
     const depot = entityList(doc.depots).find((d) => d.name === '鷺沼車庫')!;
     expect(report.depotCapacityExceeded).toBe(false);
     expect(report.depotPeakStabled).toBeLessThanOrEqual(depot.capacityFormations);
+  });
+
+  it('fills the yard road by road instead of piling every 回送 onto one', () => {
+    // The yard's roads have no direction and no through movement, so the
+    // station's "default" road used to take every single empty move: every
+    // 出庫 left 留置10番線 and every 入庫 arrived at 留置1番線, and the line view
+    // drew nineteen formations stacked on one road.
+    const yard = entityList(doc.stations).find((s) => s.name === '鷺沼車庫')!;
+    const perRoad = new Map<string, number>();
+    for (const train of deadheads) {
+      for (const stop of train.stops) {
+        if (stop.stationId !== yard.id) continue;
+        expect(stop.trackId, `${train.number}`).toBeDefined();
+        perRoad.set(stop.trackId!, (perRoad.get(stop.trackId!) ?? 0) + 1);
+      }
+    }
+
+    const total = [...perRoad.values()].reduce((n, v) => n + v, 0);
+    expect(total).toBe(deadheads.length);
+    // Every road carries some of it, and none of them carries a quarter.
+    expect(perRoad.size).toBe(yard.trackIds.length);
+    for (const [trackId, count] of perRoad) {
+      expect(count, track(trackId).name).toBeLessThan(total / 4);
+    }
   });
 });
 
