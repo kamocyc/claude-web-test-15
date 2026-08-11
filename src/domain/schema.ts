@@ -22,6 +22,7 @@ function entities<T extends z.ZodTypeAny>(item: T) {
 }
 
 const direction = z.enum(['down', 'up']);
+const stationEnd = z.enum(['down', 'up']);
 const inspectionKind = z.enum(['train', 'monthly', 'bogie', 'general']);
 
 const lineSchema = z.object({
@@ -46,6 +47,16 @@ const stationSchema = z.object({
   defaultTrackId: z.object({ down: id.optional(), up: id.optional() }),
   isConnectionPoint: z.boolean(),
   transfers: z.array(z.string()).optional(),
+  crossovers: z
+    .array(
+      z.object({
+        end: stationEnd,
+        from: z.string().min(1),
+        to: z.string().min(1),
+        name: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 const stationTrackSchema = z.object({
@@ -64,9 +75,15 @@ const stationTrackSchema = z.object({
   depotId: id.optional(),
   wiring: z
     .object({
-      ends: z.array(z.enum(['down', 'up'])),
+      ends: z.array(stationEnd),
       ladder: z.number().optional(),
       line: z.array(direction).optional(),
+      connects: z
+        .object({
+          down: z.array(z.string().min(1)).optional(),
+          up: z.array(z.string().min(1)).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });

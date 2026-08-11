@@ -341,15 +341,30 @@ interface PathRequest {
   pinnedTerminus?: PinnedEnd;
 }
 
-/** The unpinned retry still has to hold the road until the hand-over. */
+/**
+ * The unpinned retry still has to hold the road — but only until the stock
+ * moves across to the platform, not until the service train leaves.
+ *
+ * The road the unpinned attempt finds is a 引上線, and a 引上線 held for a
+ * quarter of an hour is a 引上線 that cannot turn anything round: at 溝の口
+ * there are two of them and the timetable already wants both. What really
+ * happens is that the empty move stands in the tail track until its 折り返し
+ * margin comes round and then shunts to the face, and the face is already
+ * reserved for it by `reserveBeforeOriginSec`. So the hold ends a turn margin
+ * short of the hand-over, and the duty gets the two `stable` legs to match.
+ */
 function unpinned(req: PathRequest): PathRequest {
   const { pinnedOrigin, pinnedTerminus, ...rest } = req;
   return {
     ...rest,
     preferStablingAtOrigin: true,
     preferStablingAtTerminus: true,
-    ...(pinnedTerminus === undefined ? {} : { holdTerminusUntilSec: pinnedTerminus.at }),
-    ...(pinnedOrigin === undefined ? {} : { holdOriginFromSec: pinnedOrigin.at }),
+    ...(pinnedTerminus === undefined
+      ? {}
+      : { holdTerminusUntilSec: pinnedTerminus.at - DEPOT_TURN_MARGIN_SEC }),
+    ...(pinnedOrigin === undefined
+      ? {}
+      : { holdOriginFromSec: pinnedOrigin.at + DEPOT_TURN_MARGIN_SEC }),
   };
 }
 

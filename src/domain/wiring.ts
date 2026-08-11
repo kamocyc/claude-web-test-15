@@ -9,6 +9,27 @@
  * `StationTrack.wiring` when the document states them, and are derived the way
  * they always were when it does not, so nothing has to be re-authored.
  *
+ * ## What connects to what
+ *
+ * Reaching a throat is not the same as being connected to everything in it. A
+ * road is switched onto a set of **leads** there — `'down'` and `'up'` are the
+ * running lines themselves, any other name is a lead that is not a running line
+ * — and two things can work stock between them exactly when they share a lead,
+ * or when a 渡り線 in that throat bridges the leads they are on.
+ *
+ * That is the whole of `ThroatRouting`, and it is what lets the model state the
+ * two facts a per-direction flag cannot:
+ *
+ * - 自由が丘's 引上線 is on the 下り線 and nothing else, so stock at the up
+ *   platform — which at a 相対式 station *is* the 上り線 — reaches it only over
+ *   the 片渡り線 beyond the tail track's own points, and the move fouls the
+ *   whole throat on the way.
+ * - 溝の口's 大井町線 faces are on a lead of their own that carries the two
+ *   引上線 and stops there, while the 引上線 are also on both 田園都市線 running
+ *   lines. So a 回送 off the 鷺沼 line can reach a tail track, cannot reach a
+ *   platform, and gets to one by shunting out of the other — which is exactly
+ *   what happens on the ground.
+ *
  * The line tracks outside a throat are given lateral positions too: they are
  * the roads their through movements run onto, so 下り本線 sits where the down
  * through road sits. That puts the whole throat — pointwork, platform roads and
@@ -44,10 +65,12 @@ import type {
   Direction,
   ProjectDocument,
   Station,
+  StationCrossover,
   StationEnd,
   StationTrack,
+  ThroatLead,
 } from './model';
-import { STATION_ENDS } from './model';
+import { DIRECTIONS, STATION_ENDS } from './model';
 import { orderedStations, tracksOfStation } from './project';
 import type { Meters } from './units';
 
@@ -73,7 +96,10 @@ export function defaultStubEnd(km: Meters, lineFromKm: Meters, lineToKm: Meters)
 }
 
 /** Ends a road is switched into, wiring first and the derivation second. */
-export function endsOfTrack(track: StationTrack, fallbackStubEnd: StationEnd): StationEnd[] {
+export function endsOfTrack(
+  track: Pick<StationTrack, 'usage' | 'wiring'>,
+  fallbackStubEnd: StationEnd,
+): StationEnd[] {
   if (track.wiring !== undefined) return track.wiring.ends;
   return isStubUsage(track.usage) ? [fallbackStubEnd] : [...STATION_ENDS];
 }
@@ -81,6 +107,80 @@ export function endsOfTrack(track: StationTrack, fallbackStubEnd: StationEnd): S
 /** 分岐位置 — stated, or the road's authored order among the station's 番線. */
 export function ladderOfTrack(track: StationTrack, authoredIndex: number): number {
   return track.wiring?.ladder ?? authoredIndex;
+}
+
+/**
+ * 接続先 — the leads a road is switched onto in one throat.
+ *
+ * Defaults to the running lines of the directions the road serves, which is
+ * the plain two-road station. An empty result means the road does not reach
+ * this throat at all; a result naming no running line means it reaches it and
+ * meets only other roads there, which is what the 大井町線 faces at 溝の口 are.
+ */
+export function leadsOfTrack(
+  track: Pick<StationTrack, 'usage' | 'directions' | 'wiring'>,
+  end: StationEnd,
+  fallbackStubEnd: StationEnd,
+): ThroatLead[] {
+  if (!endsOfTrack(track, fallbackStubEnd).includes(end)) return [];
+  return track.wiring?.connects?.[end] ?? track.directions;
+}
+
+/** 渡り線 in one throat. */
+export function crossoversAt(
+  station: Pick<Station, 'crossovers'> | undefined,
+  end: StationEnd,
+): StationCrossover[] {
+  return (station?.crossovers ?? []).filter((c) => c.end === end);
+}
+
+/**
+ * Every lead stock standing on `from` can reach in this throat, 渡り線 included.
+ *
+ * Transitive, because two crossovers in one throat make a chain, and closed
+ * over the seeds so a road on two leads carries both.
+ */
+export function leadsReachable(
+  station: Pick<Station, 'crossovers'> | undefined,
+  end: StationEnd,
+  from: readonly ThroatLead[],
+): Set<ThroatLead> {
+  const reached = new Set<ThroatLead>(from);
+  const links = crossoversAt(station, end);
+  for (;;) {
+    const before = reached.size;
+    for (const link of links) {
+      if (reached.has(link.from)) reached.add(link.to);
+      if (reached.has(link.to)) reached.add(link.from);
+    }
+    if (reached.size === before) return reached;
+  }
+}
+
+/** Is `lead` a running line rather than a named yard lead? */
+export function isLineLead(lead: ThroatLead): lead is Direction {
+  return DIRECTIONS.includes(lead as Direction);
+}
+
+/**
+ * Can stock on `direction`'s 本線 get into this road through this throat?
+ *
+ * The question a 進路 asks. The 番線 generator and `track.routeMissing` both go
+ * through here rather than each having their own reading, because a generator
+ * that books a road the validator then calls unreachable produces a plan that
+ * looks broken and is not — the same mistake the 続行時隔 check made once.
+ */
+export function canEnterFrom(
+  station: Pick<Station, 'crossovers'> | undefined,
+  track: Pick<StationTrack, 'usage' | 'directions' | 'wiring'>,
+  end: StationEnd,
+  direction: Direction,
+  fallbackStubEnd: StationEnd,
+): boolean {
+  const leads = leadsOfTrack(track, end, fallbackStubEnd);
+  if (leads.length === 0) return false;
+  const reach = leadsReachable(station, end, [direction]);
+  return leads.some((lead) => reach.has(lead));
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +195,8 @@ export interface RoadWiring {
   directions: Direction[];
   /** Directions whose 本線 continues straight into this road. */
   line: Direction[];
+  /** The leads each throat switches this road onto; see `leadsOfTrack`. */
+  connects: Record<StationEnd, ThroatLead[]>;
   usage: StationTrack['usage'];
   /** A stub is open at one end only; this is that end. */
   stubEnd?: StationEnd;
@@ -104,6 +206,8 @@ export interface StationWiring {
   stationId: StationId;
   roads: RoadWiring[];
   byTrack: Map<StationTrackId, RoadWiring>;
+  /** 渡り線, as authored. */
+  crossovers: StationCrossover[];
   /**
    * Lateral position of the 本線 for each direction — where a train running
    * through without diverging sits. A 方向別複々線 station has more than one
@@ -213,6 +317,10 @@ export function computeStationWiring(doc: ProjectDocument, stationId: StationId)
       ladder: ladderOfTrack(track, i),
       directions: track.directions,
       line: track.wiring?.line ?? [],
+      connects: {
+        down: leadsOfTrack(track, 'down', fallback),
+        up: leadsOfTrack(track, 'up', fallback),
+      },
       usage: track.usage,
     };
     if (ends.length === 1) road.stubEnd = ends[0]!;
@@ -232,7 +340,13 @@ export function computeStationWiring(doc: ProjectDocument, stationId: StationId)
       if (!declared && derived !== undefined) derived.line = [...derived.line, direction];
     }
   }
-  return { stationId, roads, byTrack, linePosition };
+  return {
+    stationId,
+    roads,
+    byTrack,
+    crossovers: station?.crossovers ?? [],
+    linePosition,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +354,16 @@ export function computeStationWiring(doc: ProjectDocument, stationId: StationId)
 // ---------------------------------------------------------------------------
 
 export type ThroatMoveKind = 'arrive' | 'depart' | 'shunt';
+
+/**
+ * How the wiring lets a move be made.
+ *
+ * `direct` — the two ends share a lead. `crossover` — they do not, and a 渡り線
+ * bridges them, so the move runs out past every road turnout and back, fouling
+ * both running lines on the way. `none` — the wiring simply does not join them,
+ * and the move is in the plan anyway; `track.routeMissing` is what says so.
+ */
+export type ThroatRouting = 'direct' | 'crossover' | 'none';
 
 /** One movement across one throat, as the band of the throat it sweeps. */
 export interface ThroatMove {
@@ -253,6 +377,7 @@ export interface ThroatMove {
   fromTrackId?: StationTrackId | undefined;
   /** The line track used, as a direction. Absent on an 入換. */
   lineDirection?: Direction | undefined;
+  routing: ThroatRouting;
 }
 
 /** Does a move from `a` to `b` sweep across `p`? Endpoints count. */
@@ -295,6 +420,50 @@ export function movesCross(a: ThroatMove, b: ThroatMove): boolean {
   return true;
 }
 
+/** Leads reachable from `seed` in this throat, following 渡り線. */
+function reachIn(
+  wiring: StationWiring,
+  end: StationEnd,
+  seed: readonly ThroatLead[],
+): Set<ThroatLead> {
+  return leadsReachable({ crossovers: wiring.crossovers }, end, seed);
+}
+
+/**
+ * How a move between two sets of leads is made, and the extra ground it covers.
+ *
+ * A crossover lies beyond every road turnout in the throat, so working through
+ * one takes the stock out onto both running lines involved and back — which is
+ * why the span is widened to include them. That widening is the difference
+ * between "the shunt fouls the tail track's own points" and "the shunt fouls
+ * the whole throat", and at 自由が丘 it is the latter.
+ */
+function routeBetweenLeads(
+  wiring: StationWiring,
+  end: StationEnd,
+  a: readonly ThroatLead[],
+  b: readonly ThroatLead[],
+  near: number,
+): { routing: ThroatRouting; extra: number[] } {
+  if (a.length === 0 || b.length === 0) return { routing: 'none', extra: [] };
+  if (a.some((lead) => b.includes(lead))) return { routing: 'direct', extra: [] };
+  const reach = reachIn(wiring, end, a);
+  if (!b.some((lead) => reach.has(lead))) return { routing: 'none', extra: [] };
+  const lines = [...a, ...b].filter(isLineLead);
+  return {
+    routing: 'crossover',
+    extra: lines.map((d) => lineLadder(wiring, d, near)),
+  };
+}
+
+/** The span from → to, stretched over `extra`, keeping the sense of travel. */
+function widen(from: number, to: number, extra: readonly number[]): { from: number; to: number } {
+  const points = [from, to, ...extra];
+  const lo = Math.min(...points);
+  const hi = Math.max(...points);
+  return from <= to ? { from: lo, to: hi } : { from: hi, to: lo };
+}
+
 /** The throat move a train makes arriving at / leaving `trackId`. */
 export function trainMove(
   wiring: StationWiring,
@@ -313,13 +482,25 @@ export function trainMove(
   const line = road.line.includes(args.direction)
     ? road.ladder
     : lineLadder(wiring, args.direction, road.ladder);
+  const route = routeBetweenLeads(
+    wiring,
+    args.end,
+    [args.direction],
+    road.connects[args.end],
+    road.ladder,
+  );
+  const span = widen(
+    args.kind === 'arrive' ? line : road.ladder,
+    args.kind === 'arrive' ? road.ladder : line,
+    route.extra,
+  );
   return {
     end: args.end,
     kind: args.kind,
-    from: args.kind === 'arrive' ? line : road.ladder,
-    to: args.kind === 'arrive' ? road.ladder : line,
+    ...span,
     trackId: road.trackId,
     lineDirection: args.direction,
+    routing: route.routing,
   };
 }
 
@@ -342,12 +523,19 @@ export function shuntMove(
   const shared = to.ends.filter((e) => from.ends.includes(e));
   const end = to.stubEnd ?? from.stubEnd ?? shared[0];
   if (end === undefined || !shared.includes(end)) return undefined;
+  const route = routeBetweenLeads(
+    wiring,
+    end,
+    from.connects[end],
+    to.connects[end],
+    to.ladder,
+  );
   return {
     end,
     kind: 'shunt',
-    from: from.ladder,
-    to: to.ladder,
+    ...widen(from.ladder, to.ladder, route.extra),
     fromTrackId,
     trackId: toTrackId,
+    routing: route.routing,
   };
 }

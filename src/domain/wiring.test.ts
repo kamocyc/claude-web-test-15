@@ -215,20 +215,23 @@ describe('入換', () => {
     })!;
     expect(movesCross(shunt, upTrain)).toBe(true);
 
-    // The other half of the move does not: coming out of the tail track into
-    // the up platform is a merge, and crosses nothing on the way.
+    // The other half of the move is worse, and that is the whole point of the
+    // 片渡り線: the tail track is on the 下り線 only, so getting stock from it
+    // to the up platform means running out over the crossover — past every
+    // turnout in the throat — and setting back. It fouls the 下り本線 too.
     const back = shuntMove(
       wiring,
       trackNamed('自由が丘', '引上線').id,
       trackNamed('自由が丘', '2番線').id,
     )!;
+    expect(back.routing).toBe('crossover');
     const downTrain = trainMove(wiring, {
       kind: 'depart',
       trackId: trackNamed('自由が丘', '1番線').id,
       direction: 'down',
       end: 'down',
     })!;
-    expect(movesCross(back, downTrain)).toBe(false);
+    expect(movesCross(back, downTrain)).toBe(true);
   });
 
   it('lets a shunt straight out of the face it serves alone', () => {

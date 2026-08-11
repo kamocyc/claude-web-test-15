@@ -81,6 +81,8 @@ export interface Station {
   defaultTrackId: Partial<Record<Direction, StationTrackId>>;
   /** Marks a station where 緩急接続 is intended. Drives connection checks. */
   isConnectionPoint: boolean;
+  /** 渡り線 in either throat. Absent = none; see `StationCrossover`. */
+  crossovers?: StationCrossover[];
   /** Display only — '東急目黒線', 'JR京浜東北線'. */
   transfers?: string[];
 }
@@ -143,6 +145,57 @@ export interface TrackWiring {
    * Defaults to the directions this road is the station's default for.
    */
   line?: Direction[];
+  /**
+   * What each throat switches this road onto — its 接続先.
+   *
+   * `ends` says the road reaches the throat; this says what it meets there,
+   * and the difference is what makes a layout a layout rather than a list.
+   * Two roads can work stock between them exactly when they share a lead, and
+   * a train can enter off a 本線 exactly when the road is on that line's lead.
+   *
+   * - 自由が丘's 引上線 reaches the 溝の口 throat on the 下り線 alone
+   *   (`{ down: ['down'] }`), so stock standing on the up platform — which at a
+   *   相対式 station *is* the 上り線 — cannot reach it without crossing over.
+   * - 溝の口 2・3番線 reach their 梶が谷 throat on the 大井町線 lead and nothing
+   *   else (`{ down: ['om'] }`): the 大井町線 ends at 溝の口 and the rails beyond
+   *   are the 田園都市線's. The two 引上線 are on that lead *and* on both running
+   *   lines, so a 回送 off the 鷺沼 line can reach a tail track and only a tail
+   *   track — which is exactly the way in.
+   *
+   * Keyed by throat. An end left out defaults to the running lines of every
+   * direction the road serves, which is the plain two-road station.
+   */
+  connects?: Partial<Record<StationEnd, ThroatLead[]>>;
+}
+
+/**
+ * What a road is switched onto in a throat.
+ *
+ * `'down'` and `'up'` are the running lines themselves. Any other string names
+ * a lead that is *not* a running line — the rails the 大井町線 faces at 溝の口
+ * fan into beyond the platform ends, which reach the two 引上線 and stop there.
+ * Naming those is what lets the model say "connected to each other but not to
+ * the line", which no per-direction flag can.
+ */
+export type ThroatLead = string;
+
+/**
+ * 渡り線 — pointwork joining two leads out beyond the roads' own turnouts.
+ *
+ * It belongs to the station rather than to any road because it joins no road:
+ * it is out on the open line, past everything else in the throat, and its whole
+ * purpose is to let stock change lines where no road can.
+ *
+ * What is modelled is the connection and the throat it is in. What is not is
+ * facing versus trailing — a 片渡り線 read the "wrong" way is worked by
+ * reversing over it, and every move that uses one of these reverses anyway.
+ * `from`/`to` therefore name the crossover rather than restricting it.
+ */
+export interface StationCrossover {
+  end: StationEnd;
+  from: ThroatLead;
+  to: ThroatLead;
+  name?: string;
 }
 
 export interface StationTrack {
