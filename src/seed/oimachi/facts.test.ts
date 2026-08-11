@@ -66,9 +66,22 @@ describe('東急大井町線 — 線路とホーム', () => {
     expect(Object.keys(OVERTAKE_STATIONS).sort()).toEqual(['hatanodai', 'kaminoge']);
   });
 
-  it('gives 大岡山 and 自由が丘 only two tracks — the others belong to other lines', () => {
+  it('gives 大岡山 and 自由が丘 two platform faces — the others belong to other lines', () => {
     expect(station(facts, 'ookayama').trackIds).toHaveLength(2);
-    expect(station(facts, 'jiyugaoka').trackIds).toHaveLength(2);
+    const jiyugaoka = facts.tracksOf.get(facts.S.jiyugaoka)!;
+    expect(jiyugaoka.filter((t) => t.hasPlatform)).toHaveLength(2);
+  });
+
+  it('hangs the 自由が丘 引上線 off the 溝の口 end, beyond the up platform', () => {
+    const tracks = facts.tracksOf.get(facts.S.jiyugaoka)!;
+    const tail = tracks.find((t) => t.usage === 'stabling')!;
+    expect(tail.name).toBe('引上線');
+    expect(tail.canTurnBack).toBe(true);
+    // The end is authored, not derived: 自由が丘 is in the 大井町 half of the
+    // line, so the km heuristic would put the stub on the other side.
+    expect(tail.wiring?.ends).toEqual(['down']);
+    const up = tracks.find((t) => t.name === '2番線')!;
+    expect(tail.wiring?.ladder).toBeGreaterThan(tracks.indexOf(up));
   });
 
   it('marks only 旗の台 and 上野毛 as 緩急接続 points', () => {

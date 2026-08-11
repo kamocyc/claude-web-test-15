@@ -103,3 +103,56 @@ describe('構内ダイヤ', () => {
     expect(useProjectStore.getState().history[0]?.label).toBe('番線を変更');
   });
 });
+
+describe('構内配線', () => {
+  beforeEach(reset);
+
+  const pickC = (): void => {
+    fireEvent.change(screen.getByTestId(TID.stationSelect), { target: { value: TOY.stationC } });
+  };
+
+  it('shows the derived wiring for a road that states none', () => {
+    render(<StationsScreen />);
+    pickC();
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring).toBeUndefined();
+    // A road through the station is connected at both ends…
+    expect((screen.getByTestId(TID.wiringEnd(TOY.c2, 'down')) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect((screen.getByTestId(TID.wiringEnd(TOY.c2, 'up')) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    // …at its authored position across the throat…
+    expect((screen.getByTestId(TID.wiringLadder(TOY.c2)) as HTMLInputElement).value).toBe('1');
+    // …and the 下り本線 runs into the road the station nominates, not into 待避線.
+    expect((screen.getByTestId(TID.wiringLine(TOY.c1, 'down')) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect((screen.getByTestId(TID.wiringLine(TOY.c2, 'down')) as HTMLInputElement).checked).toBe(
+      false,
+    );
+  });
+
+  it('turns a road into a stub by clearing one end', () => {
+    render(<StationsScreen />);
+    pickC();
+    fireEvent.click(screen.getByTestId(TID.wiringEnd(TOY.c2, 'up')));
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring?.ends).toEqual(['down']);
+  });
+
+  it('moves a road across the throat', () => {
+    render(<StationsScreen />);
+    pickC();
+    fireEvent.change(screen.getByTestId(TID.wiringLadder(TOY.c2)), { target: { value: '4' } });
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring?.ladder).toBe(4);
+    // The ends survive the edit — they were derived, and are now stated.
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring?.ends).toEqual(['down', 'up']);
+  });
+
+  it('declares that a 本線 runs into a road', () => {
+    render(<StationsScreen />);
+    pickC();
+    fireEvent.click(screen.getByTestId(TID.wiringLine(TOY.c2, 'down')));
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring?.line).toEqual(['down']);
+  });
+});

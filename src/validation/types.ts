@@ -114,6 +114,7 @@ export type RuleId =
   | 'track.directionNotAllowed'
   | 'track.noPlatform'
   | 'track.lengthExceeded'
+  | 'track.crossingConflict'
   // turnbacks
   | 'turnback.insufficient'
   | 'turnback.tight'

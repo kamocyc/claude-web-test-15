@@ -67,6 +67,13 @@ export const TID = {
   trackDirectionUp: 'track-direction-up',
   trackSubmit: 'track-submit',
 
+  // 構内配線 — which throat each road meets, and where across it -------------
+  wiringList: 'wiring-list',
+  wiringRow: 'wiring-row',
+  wiringEnd: (trackId: string, end: string) => `wiring-end-${trackId}-${end}`,
+  wiringLadder: (trackId: string) => `wiring-ladder-${trackId}`,
+  wiringLine: (trackId: string, direction: string) => `wiring-line-${trackId}-${direction}`,
+
   // links ------------------------------------------------------------------
   linkList: 'link-list',
   linkRow: 'link-row',

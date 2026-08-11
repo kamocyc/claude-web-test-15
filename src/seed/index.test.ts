@@ -10,7 +10,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { TrainId } from '@/domain/ids';
 import type { Link, LinkRunTime, ProjectDocument, StationTrack, Train } from '@/domain/model';
+import { computeStationWiring } from '@/domain/wiring';
 import { entityList } from '@/domain/units';
 import { SEC_PER_DAY, intervalsOverlap } from '@/domain/time';
 import { runValidation } from '@/validation/run';
@@ -320,6 +322,59 @@ describe('番線', () => {
         ).toBe(false);
       }
     }
+  });
+});
+
+describe('自由が丘の引上線', () => {
+  const tail = () =>
+    entityList(doc.stationTracks).find(
+      (t) => t.stationId === stationNamed('自由が丘').id && t.usage === 'stabling',
+    )!;
+
+  it('is wired to the 溝の口 end and lies beyond the up platform', () => {
+    const t = tail();
+    expect(t.wiring?.ends).toEqual(['down']);
+    const up = entityList(doc.stationTracks).find(
+      (x) => x.stationId === t.stationId && x.name === '2番線',
+    )!;
+    const wiring = computeStationWiring(doc, t.stationId);
+    expect(wiring.byTrack.get(t.id)!.ladder).toBeGreaterThan(wiring.byTrack.get(up.id)!.ladder);
+  });
+
+  it('carries exactly one duty, in and out of the tail track', () => {
+    const users = entityList(doc.duties).filter((d) =>
+      d.legs.some((l) => l.kind === 'stable' && l.trackId === tail().id),
+    );
+    expect(users).toHaveLength(1);
+    const duty = users[0]!;
+
+    // 出庫 → 引上線 → 入庫, and the two empty moves reverse: one arrives from
+    // 鷺沼, the other goes back there.
+    expect(duty.legs.map((l) => l.kind)).toEqual(['train', 'stable', 'train']);
+    const legs = duty.legs.filter((l) => l.kind === 'train');
+    const out = doc.trains.byId[(legs[0] as { trainId: TrainId }).trainId]!;
+    const back = doc.trains.byId[(legs[1] as { trainId: TrainId }).trainId]!;
+    expect(out.category).toBe('deadhead');
+    expect(out.direction).toBe('up');
+    expect(back.direction).toBe('down');
+    expect(out.stops[out.stops.length - 1]!.stationId).toBe(stationNamed('自由が丘').id);
+    expect(back.stops[0]!.stationId).toBe(stationNamed('自由が丘').id);
+
+    // The stock stands in the tail track between the two, having arrived on one
+    // platform road and left from the other — the shunt the 引上線 exists for.
+    const hold = duty.legs[1] as { from: number; to: number };
+    expect(hold.from).toBe(out.stops[out.stops.length - 1]!.arr);
+    expect(hold.to).toBe(back.stops[0]!.dep);
+    expect(hold.to - hold.from).toBeGreaterThan(3600);
+    expect(out.stops[out.stops.length - 1]!.trackId).not.toBe(back.stops[0]!.trackId);
+  });
+
+  it('holds nothing else on the tail track while it is there', () => {
+    const users = new Set<string>();
+    for (const train of trains) {
+      for (const stop of train.stops) if (stop.trackId === tail().id) users.add(train.number);
+    }
+    expect([...users]).toEqual([]);
   });
 });
 
