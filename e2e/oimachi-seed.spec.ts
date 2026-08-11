@@ -107,6 +107,57 @@ test.describe('東急大井町線 sample', () => {
     }
   });
 
+  test('the 行路表 covers the day with more 乗務員 than 運用, and no clashes', async ({
+    page,
+  }) => {
+    const sim = new Simulator(page);
+    await sim.crew.open();
+
+    const ids = await sim.crew.crewDutyIds();
+    // 35 運用 against ~70 行路. People take breaks and go home; vehicles do not.
+    expect(ids.length).toBeGreaterThan(35);
+    expect(ids.length).toBeLessThan(100);
+
+    const counts = await sim.crew.chartCounts();
+    expect(counts.rows).toBe(ids.length);
+    expect(counts.conflicts).toBe(0);
+    expect(await sim.crew.chartBars().count()).toBeGreaterThan(ids.length);
+
+    // Every 行路 has somebody booked on it for the active date.
+    const first = ids[0]!;
+    expect(await sim.crew.personOf(first)).toMatch(/^crw-/);
+
+    await sim.app.expectNoErrors();
+  });
+
+  test('the 行路表 zooms on the same axis as the 構内ダイヤ', async ({ page }) => {
+    const sim = new Simulator(page);
+    await sim.crew.open();
+
+    const whole = await sim.crew.window();
+    await sim.crew.zoomIn();
+    const zoomed = await sim.crew.window();
+    expect(zoomed).not.toBe(whole);
+    await sim.crew.resetZoom();
+    expect(await sim.crew.window()).toBe(whole);
+  });
+
+  test('a 行路 can be opened and given a 休憩', async ({ page }) => {
+    const sim = new Simulator(page);
+    await sim.crew.open();
+
+    const ids = await sim.crew.crewDutyIds();
+    const target = ids[0]!;
+    await sim.crew.expandDuty(target);
+    const before = await sim.crew.legs(target).count();
+    expect(before).toBeGreaterThan(1);
+
+    await sim.crew.addBreak(target);
+    expect(await sim.crew.legs(target).count()).toBe(before + 1);
+    // The 休憩 lands on the chart too — the picture and the plan are one thing.
+    expect((await sim.crew.chartCounts()).rows).toBe(ids.length);
+  });
+
   test('the 検査 screen renders the inspection projection and its badges', async ({ page }) => {
     const sim = new Simulator(page);
 

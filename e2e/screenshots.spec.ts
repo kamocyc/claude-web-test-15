@@ -75,6 +75,12 @@ test.describe('screenshots', () => {
     await toTop(sim.timetable.grid);
     await page.screenshot({ path: `${SHOTS}/timetable-grid.png` });
 
+    // -- 行路表 --------------------------------------------------------------
+    await sim.crew.open();
+    await expect(sim.crew.chart).toBeVisible();
+    await toTop(sim.crew.chart);
+    await page.screenshot({ path: `${SHOTS}/crew-chart.png` });
+
     // -- 運用 ----------------------------------------------------------------
     await sim.duties.open();
     await expect(sim.duties.board).toBeVisible();

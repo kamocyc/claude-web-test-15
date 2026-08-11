@@ -9,6 +9,7 @@
 import type { Page } from '@playwright/test';
 
 import { AppPage } from './appPage';
+import { CrewPage } from './crewPage';
 import { DiagramPage } from './diagramPage';
 import { DutiesPage } from './dutiesPage';
 import { FormationsPage } from './formationsPage';
@@ -19,6 +20,7 @@ import { TimetablePage } from './timetablePage';
 import { TypesPage } from './typesPage';
 
 export { AppPage } from './appPage';
+export { CrewPage } from './crewPage';
 export { DiagramPage } from './diagramPage';
 export { DutiesPage } from './dutiesPage';
 export { FormationsPage } from './formationsPage';
@@ -36,6 +38,7 @@ export class Simulator {
   readonly types: TypesPage;
   readonly timetable: TimetablePage;
   readonly duties: DutiesPage;
+  readonly crew: CrewPage;
   readonly formations: FormationsPage;
   readonly line: LineViewPage;
   readonly diagram: DiagramPage;
@@ -47,6 +50,7 @@ export class Simulator {
     this.types = new TypesPage(this.app);
     this.timetable = new TimetablePage(this.app);
     this.duties = new DutiesPage(this.app);
+    this.crew = new CrewPage(this.app);
     this.formations = new FormationsPage(this.app);
     this.line = new LineViewPage(this.app);
     this.diagram = new DiagramPage(this.app);
