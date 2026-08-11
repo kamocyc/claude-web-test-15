@@ -123,6 +123,9 @@ export const TID = {
     `time-cell-${trainId}-${stopIndex}-${field}`,
   trackCell: (trainId: string, stopIndex: number) => `track-cell-${trainId}-${stopIndex}`,
   autoAssignTracks: 'auto-assign-tracks',
+  /** 秒表示 — a view preference, not a document setting. */
+  timetableSeconds: 'timetable-seconds',
+  trainHeaderDirection: (trainId: string) => `train-header-direction-${trainId}`,
   recomputeTimes: 'recompute-times',
 
   // duties -----------------------------------------------------------------

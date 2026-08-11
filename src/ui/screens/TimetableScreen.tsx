@@ -14,7 +14,7 @@ import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
 import type { StationTrackId, TrainId } from '@/domain/ids';
-import type { Train, TrainStop } from '@/domain/model';
+import type { Direction, Train, TrainStop } from '@/domain/model';
 import {
   allStationsInKmOrder,
   stopsFromPattern,
@@ -33,9 +33,22 @@ import styles from './Timetable.module.css';
 
 const ROW_H = 22;
 const HEADER_H = 60;
+/** Column width, minutes only and with seconds — `07:43` against `07:43:30`. */
 const COL_W = 62;
+const COL_W_SECONDS = 80;
 const NAME_W = 96;
 const LABEL_W = 26;
+
+/**
+ * 下り / 上り, as a glyph.
+ *
+ * The column header carries 種別 and 列車番号, and neither says which way the
+ * train runs — on a line whose 各停 come in two flavours that is a real
+ * question, and the answer was only visible by opening the train editor. The
+ * arrow points the way the km axis does: down the page is down the line, which
+ * is also the direction the grid's own rows run.
+ */
+const DIRECTION_MARK: Record<Direction, string> = { down: '▼', up: '▲' };
 
 type Field = 'arr' | 'dep' | 'track';
 const FIELDS: Field[] = ['arr', 'dep', 'track'];
@@ -86,6 +99,8 @@ export function TimetableScreen() {
     s.selected[0]?.kind === 'train' ? s.selected[0].trainId : undefined,
   );
   const focusTarget = useUiStore((s) => s.focusTarget);
+  const showSeconds = useUiStore((s) => s.timetableSeconds);
+  const setShowSeconds = useUiStore((s) => s.setTimetableSeconds);
 
   const stations = useMemo(() => allStationsInKmOrder(doc), [doc]);
   const trains = useMemo(() => entityList(doc.trains), [doc]);
@@ -110,12 +125,18 @@ export function TimetableScreen() {
   const virtualizer = useVirtualizer({
     count: trains.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => COL_W,
+    estimateSize: () => (showSeconds ? COL_W_SECONDS : COL_W),
     horizontal: true,
     overscan: 8,
     initialRect: { width: FALLBACK_VIEWPORT_W, height: HEADER_H },
     observeElementRect: observeWidthWithFallback,
   });
+
+  // The virtualizer caches a size per column, so turning seconds on has to
+  // invalidate them or the grid keeps the old width and the cells overlap.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [virtualizer, showSeconds]);
 
   // A focus request from the problem panel scrolls its train into view.
   useEffect(() => {
@@ -296,8 +317,18 @@ export function TimetableScreen() {
         >
           時刻を再計算
         </button>
+        <label className={styles.toggle}>
+          <input
+            type="checkbox"
+            data-testid={TID.timetableSeconds}
+            checked={showSeconds}
+            onChange={(e) => setShowSeconds(e.currentTarget.checked)}
+          />
+          秒を表示
+        </label>
         <span className={styles.hint}>
           矢印キーでセル移動 / 数字を入力して Enter・Tab で確定 / Esc で取消
+          {showSeconds ? ' / 074330 と入力すると 07:43:30' : ''}
         </span>
       </div>
 
@@ -379,7 +410,21 @@ export function TimetableScreen() {
                           {type?.shortName ?? '—'}
                         </span>
                         <br />
-                        <span className={styles.headerNumber}>{train.number}</span>
+                        <span className={styles.headerNumber}>
+                          <span
+                            className={styles.headerDirection}
+                            data-testid={TID.trainHeaderDirection(train.id)}
+                            data-direction={train.direction}
+                            title={
+                              train.direction === 'down'
+                                ? `下り (${doc.line.downDirectionLabel})`
+                                : `上り (${doc.line.upDirectionLabel})`
+                            }
+                          >
+                            {DIRECTION_MARK[train.direction]}
+                          </span>
+                          {train.number}
+                        </span>
                       </button>
                       <button
                         type="button"
@@ -425,6 +470,7 @@ export function TimetableScreen() {
                             stop={stop}
                             stopIndex={stopIndex}
                             field="arr"
+                            seconds={showSeconds}
                             editing={editing}
                             setEditing={setEditing}
                             commit={commit}
@@ -438,6 +484,7 @@ export function TimetableScreen() {
                             stop={stop}
                             stopIndex={stopIndex}
                             field="dep"
+                            seconds={showSeconds}
                             editing={editing}
                             setEditing={setEditing}
                             commit={commit}
@@ -518,6 +565,7 @@ interface TimeCellProps {
     key: string,
   ): void;
   onFocusCell(): void;
+  seconds: boolean;
 }
 
 function TimeCell({
@@ -525,6 +573,7 @@ function TimeCell({
   stop,
   stopIndex,
   field,
+  seconds,
   editing,
   setEditing,
   commit,
@@ -533,7 +582,7 @@ function TimeCell({
 }: TimeCellProps) {
   const key = `${train.id}:${stopIndex}:${field}`;
   const raw = stop[field];
-  const display = raw === undefined ? '' : formatTime(raw);
+  const display = raw === undefined ? '' : formatTime(raw, { seconds });
   const value = editing?.key === key ? editing.text : display;
 
   return (

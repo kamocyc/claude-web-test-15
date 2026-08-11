@@ -7,9 +7,16 @@
   --bg-input: #0b1220;
   --border: #334155;
   --border-strong: #475569;
-  --text: #e2e8f0;
-  --text-dim: #94a3b8;
-  --text-faint: #64748b;
+  /*
+   * Text is three steps, and every one of them is a *readable* step. The
+   * palette used to fade to #64748b for labels and hints, which is 2.9:1 on
+   * the panel — below the 4.5:1 anyone can actually read, and it was carrying
+   * field labels, table headers and the hint lines under half the screens.
+   * Dimmer now means "one rung down the hierarchy", not "harder to see".
+   */
+  --text: #f1f5f9;
+  --text-dim: #cbd5e1;
+  --text-faint: #94a3b8;
   --accent: #38bdf8;
   --accent-dim: #0ea5e9;
   --error: #f87171;

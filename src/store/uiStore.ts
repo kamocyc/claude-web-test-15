@@ -51,6 +51,15 @@ export interface UiStoreState {
   highlightDutyId: string | undefined;
   /** Which direction 運行図表 draws. */
   diagramDirection: DirectionFilter;
+  /**
+   * Whether the timetable grid shows seconds.
+   *
+   * A view preference, not document data: the times themselves are always
+   * seconds, and `settings.timeGrainSec` says how coarse the *authoring* grain
+   * is. This only decides whether the grid shows the third field, which is off
+   * by default because a 500-column grid is read by scanning minutes.
+   */
+  timetableSeconds: boolean;
   setRoute(route: RouteName): void;
   select(ref: EntityRef | undefined, additive?: boolean): void;
   setSelected(refs: EntityRef[]): void;
@@ -60,6 +69,7 @@ export interface UiStoreState {
   toggleInspector(): void;
   setHighlightDuty(dutyId: string | undefined): void;
   setDiagramDirection(direction: DirectionFilter): void;
+  setTimetableSeconds(on: boolean): void;
   /** Highlight a duty on whichever canvas can show it, and go there. */
   showDutyInDiagram(dutyId: DutyId, at?: Sec): void;
 }
@@ -110,6 +120,7 @@ export const useUiStore = create<UiStoreState>((set, get) => ({
   inspectorOpen: true,
   highlightDutyId: undefined,
   diagramDirection: 'both',
+  timetableSeconds: false,
 
   setRoute: (route) => set({ route }),
 
@@ -153,6 +164,8 @@ export const useUiStore = create<UiStoreState>((set, get) => ({
   setHighlightDuty: (dutyId) => set({ highlightDutyId: dutyId }),
 
   setDiagramDirection: (direction) => set({ diagramDirection: direction }),
+
+  setTimetableSeconds: (on) => set({ timetableSeconds: on }),
 
   showDutyInDiagram: (dutyId, at) => {
     if (at !== undefined) useClockStore.getState().seek(at);

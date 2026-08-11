@@ -197,6 +197,49 @@ describe('StationYardChart', () => {
     }
   });
 
+  it('keeps the margin box only for a zoom that can show it', () => {
+    // 進入余裕 / 開通余裕 are 30–45 s. Drawn where the axis has room for them
+    // they are the point of the chart; drawn where a whole day is on one sheet
+    // they are a pale hairline around a bar that is deliberately borderless.
+    mount(<StationYardChart stationId={TOY.stationC} />);
+    const rects = () =>
+      screen.getByTestId(TID.yardBar(TOY.localDown)).querySelectorAll('rect').length;
+    const withMargins = rects();
+    expect(withMargins).toBeGreaterThan(1);
+
+    // Stretch the axis by booking a road late at night: the same margins are
+    // now a fifth of a pixel.
+    cleanup();
+    const scene = sampleScene();
+    const trackIntervals = new Map(scene.index.trackIntervals);
+    trackIntervals.set(TOY.c3, [
+      {
+        trackId: TOY.c3,
+        stationId: TOY.stationC,
+        trainId: TOY.depotIn,
+        from: 25 * 3600,
+        to: 25 * 3600 + 120,
+        bookedFrom: 25 * 3600 + 30,
+        bookedTo: 25 * 3600 + 90,
+      },
+    ]);
+    mount(<StationYardChart stationId={TOY.stationC} />, {
+      ...scene,
+      index: { ...scene.index, trackIntervals },
+      generation: scene.generation + 1,
+    });
+    expect(rects()).toBe(withMargins - 1);
+  });
+
+  it('separates lanes with a rule rather than a frame', () => {
+    mount(<StationYardChart stationId={TOY.stationC} />);
+    const lane = screen.getByTestId(TID.yardLane(TOY.c1));
+    for (const rect of lane.querySelectorAll('rect')) {
+      expect(rect.getAttribute('stroke')).toBeNull();
+    }
+    expect(lane.querySelectorAll('line')).toHaveLength(1);
+  });
+
   it('draws an 入換 line between the two roads one duty used', () => {
     mount(<StationYardChart stationId={TOY.stationD} />, sampleSceneWithShunt());
     const shunts = screen.getAllByTestId(TID.yardShunt);
