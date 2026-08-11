@@ -62,6 +62,19 @@
   color: var(--text);
 }
 
+.headerDirection {
+  color: var(--text-dim);
+  font-size: 10px;
+  margin-right: 2px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
 .headerType {
   font-size: 10px;
   padding: 0 4px;

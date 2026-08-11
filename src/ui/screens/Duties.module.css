@@ -10,8 +10,8 @@
 }
 
 .trayItem {
-  position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 1px 4px;
@@ -34,22 +34,28 @@
   min-width: 120px;
 }
 
+/*
+ * The duty picker opens *in flow*, as a second row of its train's item.
+ *
+ * It used to be an absolutely-positioned popup, which the tray — a 40vh box
+ * with `overflow: auto` — clipped: every choice for a train near the bottom of
+ * the list was cut off at the tray's edge, and the ones below it were
+ * unreachable. A popup cannot escape a scrolling ancestor without being
+ * portalled out of the tree, and there is nothing here worth that: the picker
+ * is a handful of buttons, and pushing its row taller lets the tray scroll to
+ * it like any other content.
+ */
 .choiceList {
-  position: absolute;
-  z-index: 20;
-  right: 0;
-  top: calc(100% - 2px);
+  flex: 1 0 100%;
   list-style: none;
-  margin: 0;
+  margin: 2px 0 4px;
   padding: 4px;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  max-width: 320px;
   background: var(--bg-panel-2);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
 }
 
 .gantt {

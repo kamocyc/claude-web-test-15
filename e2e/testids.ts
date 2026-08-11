@@ -47,7 +47,7 @@ export const TID = {
   stationNameInput: 'station-name-input',
   stationKmInput: 'station-km-input',
   stationCodeInput: 'station-code-input',
-  stationSubmit: 'station-submit',
+  stationCodeCell: (stationId: string) => `station-code-cell-${stationId}`,
   stationSelect: 'station-select',
   stationMinDwell: 'station-min-dwell',
   stationMinTurnback: 'station-min-turnback',
@@ -65,7 +65,6 @@ export const TID = {
   trackMaxCars: 'track-max-cars',
   trackDirectionDown: 'track-direction-down',
   trackDirectionUp: 'track-direction-up',
-  trackSubmit: 'track-submit',
 
   // 構内配線 — which throat each road meets, and where across it -------------
   wiringList: 'wiring-list',
@@ -88,7 +87,6 @@ export const TID = {
   depotStationSelect: 'depot-station-select',
   depotAccessSecInput: 'depot-access-sec-input',
   depotCapacityInput: 'depot-capacity-input',
-  depotSubmit: 'depot-submit',
 
   // train types & patterns -------------------------------------------------
   trainTypeList: 'train-type-list',
@@ -97,14 +95,12 @@ export const TID = {
   trainTypeNameInput: 'train-type-name-input',
   trainTypeShortInput: 'train-type-short-input',
   trainTypeColorInput: 'train-type-color-input',
-  trainTypeSubmit: 'train-type-submit',
   patternAdd: 'pattern-add',
   patternNameInput: 'pattern-name-input',
   patternTypeSelect: 'pattern-type-select',
   patternDirectionSelect: 'pattern-direction-select',
   patternOriginSelect: 'pattern-origin-select',
   patternTerminusSelect: 'pattern-terminus-select',
-  patternSubmit: 'pattern-submit',
   patternMatrix: 'pattern-matrix',
   /** One cell of the stop-pattern matrix. Click cycles 停 → 通 → −. */
   patternCell: (patternId: string, stationId: string) => `pattern-cell-${patternId}-${stationId}`,
@@ -116,20 +112,21 @@ export const TID = {
   trainTypeSelect: 'train-type-select',
   trainPatternSelect: 'train-pattern-select',
   trainOriginDepInput: 'train-origin-dep-input',
-  trainSubmit: 'train-submit',
   trainColumn: (trainId: string) => `train-col-${trainId}`,
   /** field is 'arr' | 'dep'. */
   timeCell: (trainId: string, stopIndex: number, field: string) =>
     `time-cell-${trainId}-${stopIndex}-${field}`,
   trackCell: (trainId: string, stopIndex: number) => `track-cell-${trainId}-${stopIndex}`,
   autoAssignTracks: 'auto-assign-tracks',
+  /** 秒表示 — a view preference, not a document setting. */
+  timetableSeconds: 'timetable-seconds',
+  trainHeaderDirection: (trainId: string) => `train-header-direction-${trainId}`,
   recomputeTimes: 'recompute-times',
 
   // duties -----------------------------------------------------------------
   dutyBoard: 'duty-board',
   dutyAdd: 'duty-add',
   dutyCodeInput: 'duty-code-input',
-  dutySubmit: 'duty-submit',
   dutyRow: (dutyId: string) => `duty-row-${dutyId}`,
   dutyLeg: (dutyId: string, legIndex: number) => `duty-leg-${dutyId}-${legIndex}`,
   dutyAutoAssign: 'duty-auto-assign',
@@ -149,11 +146,9 @@ export const TID = {
   formationCarsInput: 'formation-cars-input',
   formationDepotSelect: 'formation-depot-select',
   formationOdometerInput: 'formation-odometer-input',
-  formationSubmit: 'formation-submit',
   seriesAdd: 'series-add',
   seriesNameInput: 'series-name-input',
   seriesCarsInput: 'series-cars-input',
-  seriesSubmit: 'series-submit',
   inspectionTable: 'inspection-table',
   inspectionBadge: (formationId: string, kind: string) => `inspection-badge-${formationId}-${kind}`,
   inspectionSchedule: (formationId: string) => `inspection-schedule-${formationId}`,

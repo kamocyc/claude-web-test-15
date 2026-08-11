@@ -67,6 +67,15 @@ const ZOOM_STEP = 1.6;
  * between neighbours on a 900 px plot.
  */
 const SHUNT_MIN_PX_PER_SEC = 0.08;
+/**
+ * How much of a margin has to be visible before the margin box is drawn.
+ *
+ * 進入余裕 is 30–45 s, which at whole-day zoom is one pixel: the box then adds
+ * nothing but a pale hairline around every bar, which reads as a border on
+ * bars that are deliberately borderless. Below the threshold the bar is simply
+ * the booking; zoom in and the margins appear as the boxes they are.
+ */
+const MARGIN_MIN_PX = 2;
 
 interface DragState {
   trainId: TrainId;
@@ -395,8 +404,16 @@ export function StationYardChart(props: StationYardProps) {
                         ? withAlpha(theme.panelAlt, 0.5)
                         : 'transparent'
                 }
+              />
+              {/* One rule between lanes. A stroked box would also draw the two
+                  ends, which together read as a frame around every row. */}
+              <line
+                x1={0}
+                y1={y + LANE_H}
+                x2={LABEL_W + plotW}
+                y2={y + LANE_H}
                 stroke={theme.grid}
-                strokeWidth={0.5}
+                strokeWidth={1}
               />
               <text x={6} y={y + LANE_H / 2 + 4} fill={theme.text} fontSize={11}>
                 {lane.name}
@@ -475,14 +492,16 @@ export function StationYardChart(props: StationYardProps) {
                 }
               }}
             >
-              {/* margin-inclusive occupancy */}
-              <rect
-                x={x}
-                y={y}
-                width={w}
-                height={h}
-                fill={bar.conflict ? withAlpha(theme.conflict, 0.3) : withAlpha(bar.color, 0.22)}
-              />
+              {/* margin-inclusive occupancy — only where it is worth a pixel */}
+              {bx - x >= MARGIN_MIN_PX || x + w - (bx + bw) >= MARGIN_MIN_PX ? (
+                <rect
+                  x={x}
+                  y={y}
+                  width={w}
+                  height={h}
+                  fill={bar.conflict ? withAlpha(theme.conflict, 0.3) : withAlpha(bar.color, 0.22)}
+                />
+              ) : null}
               {/* timetabled dwell */}
               <rect
                 x={bx}

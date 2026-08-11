@@ -17,7 +17,12 @@ function reset(): void {
     redoStack: [],
     dirty: false,
   });
-  useUiStore.setState({ selected: [], hovered: undefined, focusTarget: undefined });
+  useUiStore.setState({
+    selected: [],
+    hovered: undefined,
+    focusTarget: undefined,
+    timetableSeconds: false,
+  });
 }
 
 afterEach(cleanup);
@@ -124,7 +129,7 @@ describe('列車を追加', () => {
       target: { value: TOY.patLocalDown },
     });
     fireEvent.change(screen.getByTestId(TID.trainOriginDepInput), { target: { value: '0930' } });
-    fireEvent.click(screen.getByTestId(TID.trainSubmit));
+    fireEvent.click(screen.getByTestId(TID.trainAdd));
 
     const doc = useProjectStore.getState().doc;
     const created = Object.values(doc.trains.byId).find((t) => t.number === '999');
@@ -141,8 +146,49 @@ describe('列車を追加', () => {
   it('refuses an unparseable origin departure', () => {
     render(<TimetableScreen />);
     fireEvent.change(screen.getByTestId(TID.trainOriginDepInput), { target: { value: 'zz' } });
-    fireEvent.click(screen.getByTestId(TID.trainSubmit));
+    fireEvent.click(screen.getByTestId(TID.trainAdd));
     expect(useProjectStore.getState().history).toHaveLength(0);
     expect(screen.getByText(/始発時刻を/)).toBeTruthy();
+  });
+});
+
+describe('秒表示と方向', () => {
+  beforeEach(reset);
+
+  it('shows minutes by default and seconds when asked', () => {
+    render(<TimetableScreen />);
+    const cell = () =>
+      screen.getByTestId(TID.timeCell(TOY.localDown, 2, 'arr')) as HTMLInputElement;
+    // 各101 arrives at C駅 at 08:04:00 — but the interesting one is a time that
+    // is not on the minute, so give it one.
+    expect(cell().value).toBe('08:04');
+
+    fireEvent.click(screen.getByTestId(TID.timetableSeconds));
+    expect(cell().value).toBe('08:04:00');
+  });
+
+  it('still writes what is typed, seconds and all', () => {
+    render(<TimetableScreen />);
+    fireEvent.click(screen.getByTestId(TID.timetableSeconds));
+    const cell = screen.getByTestId(TID.timeCell(TOY.localDown, 1, 'arr'));
+    fireEvent.change(cell, { target: { value: '074330' } });
+    fireEvent.keyDown(cell, { key: 'Enter' });
+    expect(localTrain().stops[1]?.arr).toBe(7 * 3600 + 43 * 60 + 30);
+    expect(
+      (screen.getByTestId(TID.timeCell(TOY.localDown, 1, 'arr')) as HTMLInputElement).value,
+    ).toBe('07:43:30');
+  });
+
+  it('marks each column with the direction its train runs', () => {
+    render(<TimetableScreen />);
+    const down = screen.getByTestId(TID.trainHeaderDirection(TOY.localDown));
+    expect(down.getAttribute('data-direction')).toBe('down');
+    expect(down.textContent).toBe('▼');
+    expect(down.getAttribute('title')).toContain('下り');
+
+    const up = screen.getByTestId(TID.trainHeaderDirection(TOY.depotIn));
+    expect(up.getAttribute('data-direction')).toBe('up');
+    expect(up.textContent).toBe('▲');
+    expect(up.getAttribute('title')).toContain('上り');
   });
 });

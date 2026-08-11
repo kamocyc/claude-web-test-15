@@ -138,9 +138,6 @@ export function FormationsScreen() {
               onChange={(e) => setSeriesCars(e.currentTarget.value)}
             />
           </Field>
-          <button type="button" data-testid={TID.seriesSubmit} onClick={addSeries}>
-            追加
-          </button>
           <button type="button" data-testid={TID.seriesAdd} onClick={addSeries}>
             形式を追加
           </button>
@@ -249,14 +246,6 @@ export function FormationsScreen() {
               onChange={(e) => setOdometer(e.currentTarget.value)}
             />
           </Field>
-          <button
-            type="button"
-            data-testid={TID.formationSubmit}
-            onClick={addFormation}
-            disabled={series.length === 0 || depots.length === 0}
-          >
-            追加
-          </button>
           <button
             type="button"
             data-testid={TID.formationAdd}

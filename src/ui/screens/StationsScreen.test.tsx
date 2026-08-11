@@ -156,3 +156,30 @@ describe('構内配線', () => {
     expect(doc().stationTracks.byId[TOY.c2]?.wiring?.line).toEqual(['down']);
   });
 });
+
+describe('駅の編集', () => {
+  beforeEach(reset);
+
+  it('edits the station code after the station exists', () => {
+    render(<StationsScreen />);
+    const cell = screen.getByTestId(TID.stationCodeCell(TOY.stationB));
+    fireEvent.change(cell, { target: { value: 'OM02' } });
+    expect(doc().stations.byId[TOY.stationB]?.code).toBe('OM02');
+  });
+
+  it('clears the code rather than storing an empty string', () => {
+    render(<StationsScreen />);
+    const cell = screen.getByTestId(TID.stationCodeCell(TOY.stationB));
+    fireEvent.change(cell, { target: { value: 'OM02' } });
+    fireEvent.change(cell, { target: { value: '  ' } });
+    expect(doc().stations.byId[TOY.stationB]).not.toHaveProperty('code');
+  });
+
+  it('offers exactly one 追加 button per form', () => {
+    render(<StationsScreen />);
+    // Two buttons wired to the same handler read as two different actions.
+    expect(screen.getAllByTestId(TID.stationAdd)).toHaveLength(1);
+    expect(screen.getAllByTestId(TID.trackAdd)).toHaveLength(1);
+    expect(screen.queryAllByRole('button', { name: '追加' })).toHaveLength(0);
+  });
+});

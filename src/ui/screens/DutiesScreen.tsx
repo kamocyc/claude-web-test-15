@@ -148,9 +148,6 @@ export function DutiesScreen() {
                 onChange={(e) => setCode(e.currentTarget.value)}
               />
             </Field>
-            <button type="button" data-testid={TID.dutySubmit} onClick={addDuty}>
-              追加
-            </button>
             <button type="button" data-testid={TID.dutyAdd} onClick={addDuty}>
               運用を追加
             </button>
@@ -333,7 +330,14 @@ export function DutiesScreen() {
                   運用に追加 ▾
                 </button>
                 {openTrainId === train.id ? (
-                  <ul className={duties.choiceList}>
+                  <ul
+                    className={duties.choiceList}
+                    // The picker opens as a second row of its item, which can
+                    // land below the fold of the tray *or* of the screen — and
+                    // a list of buttons nobody can see is the same as no list.
+                    // Scrolling the minimum on mount brings it back in both.
+                    ref={(el) => el?.scrollIntoView({ block: 'nearest' })}
+                  >
                     {dutyList.length === 0 ? (
                       <li className={styles.empty}>先に運用を作成してください</li>
                     ) : null}
