@@ -129,7 +129,7 @@ describe('列車を追加', () => {
       target: { value: TOY.patLocalDown },
     });
     fireEvent.change(screen.getByTestId(TID.trainOriginDepInput), { target: { value: '0930' } });
-    fireEvent.click(screen.getByTestId(TID.trainSubmit));
+    fireEvent.click(screen.getByTestId(TID.trainAdd));
 
     const doc = useProjectStore.getState().doc;
     const created = Object.values(doc.trains.byId).find((t) => t.number === '999');
@@ -146,7 +146,7 @@ describe('列車を追加', () => {
   it('refuses an unparseable origin departure', () => {
     render(<TimetableScreen />);
     fireEvent.change(screen.getByTestId(TID.trainOriginDepInput), { target: { value: 'zz' } });
-    fireEvent.click(screen.getByTestId(TID.trainSubmit));
+    fireEvent.click(screen.getByTestId(TID.trainAdd));
     expect(useProjectStore.getState().history).toHaveLength(0);
     expect(screen.getByText(/始発時刻を/)).toBeTruthy();
   });

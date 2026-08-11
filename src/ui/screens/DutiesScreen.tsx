@@ -148,9 +148,6 @@ export function DutiesScreen() {
                 onChange={(e) => setCode(e.currentTarget.value)}
               />
             </Field>
-            <button type="button" data-testid={TID.dutySubmit} onClick={addDuty}>
-              追加
-            </button>
             <button type="button" data-testid={TID.dutyAdd} onClick={addDuty}>
               運用を追加
             </button>

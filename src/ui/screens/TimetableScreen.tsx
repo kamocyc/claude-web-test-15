@@ -684,19 +684,6 @@ function TrainAddForm() {
 
   return (
     <div className={styles.toolbar}>
-      <button
-        type="button"
-        data-testid={TID.trainAdd}
-        onClick={() => {
-          if (originDep.trim() !== '') {
-            submit();
-            return;
-          }
-          document.querySelector<HTMLInputElement>(`[data-testid="${TID.trainNumberInput}"]`)?.focus();
-        }}
-      >
-        列車を追加
-      </button>
       <label className={styles.hint}>
         列車番号
         <br />
@@ -753,8 +740,11 @@ function TrainAddForm() {
           onChange={(e) => setOriginDep(e.currentTarget.value)}
         />
       </label>
-      <button type="button" data-testid={TID.trainSubmit} onClick={submit}>
-        追加
+      {/* One button, at the end of the fields it acts on. There used to be a
+          second one at the head of the form doing the same thing under a
+          different name, which read as two different actions. */}
+      <button type="button" data-testid={TID.trainAdd} onClick={submit}>
+        列車を追加
       </button>
       {error !== '' ? <span style={{ color: 'var(--error)' }}>{error}</span> : null}
     </div>

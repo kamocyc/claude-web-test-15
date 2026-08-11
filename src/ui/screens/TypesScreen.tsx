@@ -107,9 +107,6 @@ export function TypesScreen() {
                 onChange={(e) => setTypeColor(e.currentTarget.value)}
               />
             </Field>
-            <button type="button" data-testid={TID.trainTypeSubmit} onClick={addType}>
-              追加
-            </button>
             <button type="button" data-testid={TID.trainTypeAdd} onClick={addType}>
               種別を追加
             </button>
@@ -599,14 +596,6 @@ function PatternForm({
             ))}
           </select>
         </Field>
-        <button
-          type="button"
-          data-testid={TID.patternSubmit}
-          onClick={addPattern}
-          disabled={types.length === 0 || stations.length < 2}
-        >
-          追加
-        </button>
         <button
           type="button"
           data-testid={TID.patternAdd}

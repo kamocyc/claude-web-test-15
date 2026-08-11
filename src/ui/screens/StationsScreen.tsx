@@ -26,6 +26,7 @@ import { newId } from '@/store/idPool';
 import { useUiStore } from '@/store/uiStore';
 import { Card, CheckField, Field } from '../components/Field';
 import { useDispatch, useDoc } from '../hooks';
+import { clearing } from '../patch';
 
 import styles from './Editor.module.css';
 
@@ -207,9 +208,6 @@ export function StationsScreen() {
                 onChange={(e) => setCode(e.currentTarget.value)}
               />
             </Field>
-            <button type="button" data-testid={TID.stationSubmit} onClick={addStation}>
-              追加
-            </button>
             <button type="button" data-testid={TID.stationAdd} onClick={addStation}>
               駅を追加
             </button>
@@ -284,7 +282,25 @@ export function StationsScreen() {
                         }
                       />
                     </td>
-                    <td>{station.code ?? '—'}</td>
+                    <td>
+                      {/* Editable, like every other column: a station code is
+                          the one field the form asked for once and then never
+                          let anyone correct. Blank clears it. */}
+                      <input
+                        className={styles.narrow}
+                        data-testid={TID.stationCodeCell(station.id)}
+                        value={station.code ?? ''}
+                        aria-label={`${station.name} の駅コード`}
+                        onChange={(e) => {
+                          const next = e.currentTarget.value.trim();
+                          dispatch({
+                            type: 'station/update',
+                            id: station.id,
+                            patch: next === '' ? clearing<Station>('code') : { code: next },
+                          });
+                        }}
+                      />
+                    </td>
                     <td className={styles.num}>
                       <input
                         className={styles.narrow}
@@ -715,9 +731,6 @@ function TrackEditor({
             />
             <CheckField label="下り" testid={TID.trackDirectionDown} checked={down} onChange={setDown} />
             <CheckField label="上り" testid={TID.trackDirectionUp} checked={up} onChange={setUp} />
-            <button type="button" data-testid={TID.trackSubmit} onClick={addTrack}>
-              追加
-            </button>
             <button type="button" data-testid={TID.trackAdd} onClick={addTrack}>
               番線を追加
             </button>
@@ -1187,14 +1200,6 @@ function DepotEditor({ stations, depots }: { stations: Station[]; depots: Depot[
             onChange={(e) => setCapacity(e.currentTarget.value)}
           />
         </Field>
-        <button
-          type="button"
-          data-testid={TID.depotSubmit}
-          onClick={addDepot}
-          disabled={stations.length === 0}
-        >
-          追加
-        </button>
         <button
           type="button"
           data-testid={TID.depotAdd}

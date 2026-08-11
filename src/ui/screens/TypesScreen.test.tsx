@@ -76,7 +76,7 @@ describe('種別の追加', () => {
     render(<TypesScreen />);
     fireEvent.change(screen.getByTestId(TID.trainTypeNameInput), { target: { value: '特急' } });
     fireEvent.change(screen.getByTestId(TID.trainTypeShortInput), { target: { value: '特' } });
-    fireEvent.click(screen.getByTestId(TID.trainTypeSubmit));
+    fireEvent.click(screen.getByTestId(TID.trainTypeAdd));
 
     const types = entityList(useProjectStore.getState().doc.trainTypes);
     expect(types.map((t) => t.name)).toContain('特急');
@@ -85,7 +85,7 @@ describe('種別の追加', () => {
   it('creates a pattern that stops everywhere by default', () => {
     render(<TypesScreen />);
     fireEvent.change(screen.getByTestId(TID.patternNameInput), { target: { value: '新パターン' } });
-    fireEvent.click(screen.getByTestId(TID.patternSubmit));
+    fireEvent.click(screen.getByTestId(TID.patternAdd));
 
     const created = entityList(useProjectStore.getState().doc.stopPatterns).find(
       (p) => p.name === '新パターン',
