@@ -59,6 +59,7 @@ import {
   DEPOT_TURN_MARGIN_SEC,
   type DepotRunPins,
 } from './generator/depotRuns';
+import { buildHoldDuty } from './generator/holdDuty';
 
 /** Beyond this a formation goes back to the depot instead of waiting. */
 const MAX_LAYOVER_SEC = 2400;
@@ -113,6 +114,16 @@ const STABLE_LEG_MIN_SEC = 1200;
 const SHUNT_TO_SIDING_MIN_SEC = 420;
 /** Depot time a formation needs between two duties on the same day. */
 const BETWEEN_DUTIES_SEC = 1800;
+/**
+ * The window the 自由が丘 hold covers — see step 4b.
+ *
+ * Between the peaks, and inside one band at each end so the empty moves are
+ * pathed through the 昼間 pattern rather than through a band transition. The
+ * search will walk either move away from these if the timetable is in the way,
+ * so they are the intent, not the answer.
+ */
+const JIYUGAOKA_HOLD_FROM_SEC: Sec = 10 * 3600 + 30 * 60;
+const JIYUGAOKA_HOLD_TO_SEC: Sec = 15 * 3600;
 /** Reconstruction: average daily mileage, used to back-date odometer readings. */
 const DAILY_KM = 340;
 
@@ -594,6 +605,35 @@ export function buildOimachiProject(): ProjectDocument {
       dutySpans.push({ dutyId, cars: pool.cars, from: runs.fromSec, to: runs.toSec });
     });
   }
+
+  // -- 4b. the 自由が丘 hold ------------------------------------------------
+  // One duty that is nothing but a use of a 引上線: 出庫 to 自由が丘 in the
+  // morning, the middle of the day in the tail track, 入庫 in the evening. It
+  // is the only place in the plan where a formation is held at an intermediate
+  // station, and the reason it can be is the tail track added on the 溝の口
+  // side — a road whose side, lateral position and open end are authored rather
+  // than guessed. See `buildHoldDuty`.
+  const hold = buildHoldDuty(
+    {
+      facts,
+      depot: saginuma,
+      booking,
+      nextTrainId: () => nextTrainId<'Train'>(),
+      nextNumber: nextDeadheadNumber,
+    },
+    {
+      stationKey: 'jiyugaoka',
+      cars: CARS.local,
+      arriveBy: JIYUGAOKA_HOLD_FROM_SEC,
+      departAfter: JIYUGAOKA_HOLD_TO_SEC,
+      code: `${String(pools[1]!.chains.length + 1).padStart(2, '0')}K`,
+      dutyId: nextDutyId<'Duty'>(),
+      dayTypeId: facts.dayTypeId,
+    },
+  );
+  deadheadTrains.push(...hold.trains);
+  duties.push(hold.duty);
+  dutySpans.push({ dutyId: hold.duty.id, cars: CARS.local, from: hold.from, to: hold.to });
 
   const allTrains: Train[] = [...serviceTrains, ...deadheadTrains];
   for (const train of allTrains) {

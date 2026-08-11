@@ -87,6 +87,64 @@ export interface Station {
 
 export type TrackUsage = 'main' | 'passing' | 'through' | 'depot' | 'stabling';
 
+/**
+ * Which throat of a station. `down` is the end 下り trains leave by — the
+ * higher-km end — and `up` the lower-km one. 溝の口's 引上線 are at its `down`
+ * end (梶が谷方); 大井町's two roads are open at the `down` end only, because
+ * the other end is the buffer stops.
+ */
+export type StationEnd = 'down' | 'up';
+
+export const STATION_ENDS: readonly StationEnd[] = ['down', 'up'];
+
+export const STATION_END_LABEL: Record<StationEnd, string> = {
+  down: '下り方',
+  up: '上り方',
+};
+
+/**
+ * 構内配線 — how one road is wired into the station.
+ *
+ * Everything here used to be guessed from `usage` and `directions`, and the
+ * guess is wrong wherever the real place is interesting: a 引上線 was assumed
+ * to hang off whichever end of the line the station is nearest, which puts
+ * 自由が丘's on the 大井町 side when it is on the 溝の口 side. Both fields are
+ * optional and the derivation is unchanged when they are absent, so a document
+ * only has to describe the wiring where the wiring matters.
+ */
+export interface TrackWiring {
+  /**
+   * Throats this road is switched into. Two ends = a road through the station;
+   * one = a stub (引上線, 頭端式のホーム) reachable only from that end; none = a
+   * siding nothing can reach, which is a fact worth being able to state.
+   */
+  ends: StationEnd[];
+  /**
+   * 分岐位置 — where the road sits *across* the throat, counted from the 下り
+   * side. Defaults to the road's authored order among the station's 番線.
+   *
+   * It is a lateral coordinate, not an ordinal: two roads may share a position
+   * (a 引上線 that is the continuation of the platform road beyond the buffer
+   * is at the same place across the throat as that road), and a move fouls
+   * every road whose position lies between the two it joins. That is the whole
+   * of the 平面交差支障 model — see `src/domain/wiring.ts`.
+   */
+  ladder?: number;
+  /**
+   * Directions whose 本線 runs *straight into* this road, so a train taking it
+   * diverges nowhere and fouls nothing.
+   *
+   * Not the same as `directions`, which says who is allowed on the road. 溝の口
+   * 2番線 is signalled both ways because trains turn back on it, but only the
+   * 大井町線下り本線 continues into it: an up train leaving it has to cross to
+   * the up line, over the road 3番線 arrivals use, and that crossing is the
+   * reason the terminal cannot turn round more trains than it does.
+   *
+   * Defaults to the directions this road is the station's default for.
+   */
+  line?: Direction[];
+}
+
 export interface StationTrack {
   id: StationTrackId;
   stationId: StationId;
@@ -108,6 +166,8 @@ export interface StationTrack {
   /** Occupancy ends this many seconds after the booked departure. */
   clearSec: number;
   depotId?: DepotId;
+  /** 構内配線. Absent = derived; see `TrackWiring`. */
+  wiring?: TrackWiring;
 }
 
 /** Always oriented in the `down` sense: from lower km to higher km. */

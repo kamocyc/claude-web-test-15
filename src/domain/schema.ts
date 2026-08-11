@@ -62,6 +62,13 @@ const stationTrackSchema = z.object({
   approachSec: z.number().nonnegative(),
   clearSec: z.number().nonnegative(),
   depotId: id.optional(),
+  wiring: z
+    .object({
+      ends: z.array(z.enum(['down', 'up'])),
+      ladder: z.number().optional(),
+      line: z.array(direction).optional(),
+    })
+    .optional(),
 });
 
 const linkSchema = z.object({

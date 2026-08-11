@@ -57,6 +57,7 @@ import type { Direction, ProjectDocument, Station, StationTrack } from '@/domain
 import { orderedStations, tracksOfStation } from '@/domain/project';
 import type { Meters } from '@/domain/units';
 import { entityList } from '@/domain/units';
+import { defaultStubEnd, ladderOfTrack } from '@/domain/wiring';
 
 /** CSS pixels per lane at the minimum zoom. Only x zooms freely; see the header. */
 export const LANE_HEIGHT = 26;
@@ -101,19 +102,45 @@ export function depotLanePitch(trackCount: number): number {
  *
  * A tail track is not a road through the station, it is a stub beyond the
  * platform, and which end it is beyond is a fact about the place: 溝の口's two
- * are on the 梶が谷 side, and 大井町 famously has none because there is no room
- * past the buffers. The document does not record the side, so it is derived
- * from the one thing that always agrees with it — a stub points at the end of
- * the line the station is nearest, which is exactly right at a terminal (where
- * tail tracks live) and is the best available guess anywhere else.
+ * are on the 梶が谷 side, 自由が丘's on the 溝の口 side, and 大井町 famously has
+ * none because there is no room past the buffers. Where the document states it
+ * — `TrackWiring.ends` — that is the answer; where it does not, it is derived
+ * from the one thing that usually agrees with it: a stub points at the end of
+ * the line its station is nearest, which is exactly right at a terminal (where
+ * tail tracks live) and merely the best available guess anywhere else. 自由が丘
+ * is precisely where the guess is wrong, which is why the field exists.
  */
 export function stubSide(km: Meters, lineFromKm: Meters, lineToKm: Meters): 1 | -1 {
-  return km - lineFromKm >= lineToKm - km ? 1 : -1;
+  return defaultStubEnd(km, lineFromKm, lineToKm) === 'down' ? 1 : -1;
 }
 
-/** A road that dead-ends off the end of a station rather than running through. */
-export function isStubTrack(track: Pick<StationTrack, 'usage'>): boolean {
-  return track.usage === 'stabling';
+/** The drawn side of a stub: its authored end, or the km guess. */
+function sideOfStub(
+  track: StationTrack,
+  km: Meters,
+  lineFromKm: Meters,
+  lineToKm: Meters,
+): 1 | -1 {
+  const stated = track.wiring?.ends;
+  if (stated !== undefined && stated.length > 0) return stated[0] === 'down' ? 1 : -1;
+  return stubSide(km, lineFromKm, lineToKm);
+}
+
+/**
+ * A road that dead-ends off the end of a station rather than running through.
+ *
+ * A 頭端式 platform road is open at one end too — 大井町's two are — but it is
+ * still the road the service runs on and is drawn as one; what makes a stub a
+ * stub *here* is that trains do not pass along it. So: a stabling road always,
+ * and any other road that the wiring says is open at one end and that has no
+ * platform.
+ */
+export function isStubTrack(
+  track: Pick<StationTrack, 'usage' | 'hasPlatform' | 'wiring'>,
+): boolean {
+  if (track.usage === 'stabling') return true;
+  const ends = track.wiring?.ends;
+  return ends !== undefined && ends.length < 2 && !track.hasPlatform;
 }
 
 export interface LaneCommon {
@@ -540,7 +567,20 @@ export function computeLineLayout(
     // beside those roads and never on top of a running lane.
     const stubLaneFrom = Math.max(1, Math.floor((mainLaneCount - stubs.length) / 2));
     stubs.forEach((t, i) => {
-      assignment.set(t.id, Math.min(stubLaneFrom + i, Math.max(1, mainLaneCount - 2)));
+      // A tail track that is the continuation of a platform road past the
+      // buffer end shares that road's lane, because that is what it is: 溝の口's
+      // 引上1号線 carries on from 2番線 and is drawn carrying on from it. The
+      // two never overlap, since the stub lives beyond the end of the station
+      // block. Where the wiring names no such road — 自由が丘's tail track lies
+      // outside the up platform, where there is no lane to share — the stub
+      // takes an inner lane and stays clear of both running lanes.
+      const ladder = ladderOfTrack(t, tracks.indexOf(t));
+      const aligned = through.find((r) => ladderOfTrack(r, tracks.indexOf(r)) === ladder);
+      const alignedLane = aligned === undefined ? undefined : assignment.get(aligned.id);
+      assignment.set(
+        t.id,
+        alignedLane ?? Math.min(stubLaneFrom + i, Math.max(1, mainLaneCount - 2)),
+      );
     });
     const x0 = station.kmFromOrigin - halfWidth;
     const x1 = station.kmFromOrigin + halfWidth;
@@ -565,7 +605,7 @@ export function computeLineLayout(
       // a shunt out of a platform and into the tail track be drawn as one
       // continuous move along drawn track: out along the platform road, over
       // the throat, and back out on the stub.
-      const stub = isStubTrack(t) ? stubSide(station.kmFromOrigin, firstKm, lastKm) : 0;
+      const stub = isStubTrack(t) ? sideOfStub(t, station.kmFromOrigin, firstKm, lastKm) : 0;
       const throatX = stub > 0 ? x1 : x0;
       const stubBodyX = throatX + stub * leadWidth;
       const tipX = stubBodyX + stub * stubLength;

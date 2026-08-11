@@ -2,12 +2,12 @@
 
 exports[`決定性とダイジェスト > matches the digest baseline 1`] = `
 {
-  "assignments": 34,
+  "assignments": 35,
   "connectionStops": 142,
-  "deadheadTrains": 68,
-  "duties": 34,
+  "deadheadTrains": 70,
+  "duties": 35,
   "dutiesByCars": {
-    "5": 29,
+    "5": 30,
     "7": 5,
   },
   "formations": 23,
@@ -20,12 +20,12 @@ exports[`決定性とダイジェスト > matches the digest baseline 1`] = `
   "overtakenStops": 142,
   "peakConcurrentDuties": 20,
   "serviceTrains": 478,
-  "stationTracks": 69,
+  "stationTracks": 70,
   "stations": 23,
-  "totalKm": 7019,
-  "trains": 546,
+  "totalKm": 7041,
+  "trains": 548,
   "trainsByBand": {
-    "(回送)": 68,
+    "(回送)": 70,
     "b1-early": 24,
     "b10-evening": 48,
     "b11-evening-late": 12,
@@ -41,13 +41,13 @@ exports[`決定性とダイジェスト > matches the digest baseline 1`] = `
     "b9-evening-lead": 14,
   },
   "trainsByDirection": {
-    "down": 273,
-    "up": 273,
+    "down": 274,
+    "up": 274,
   },
   "trainsByType": {
     "各駅停車(緑)": 201,
     "各駅停車(青)": 135,
-    "回送": 68,
+    "回送": 70,
     "急行": 142,
   },
 }

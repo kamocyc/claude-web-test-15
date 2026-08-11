@@ -15,8 +15,11 @@ import type {
   Station,
   StationTrack,
   TrackUsage,
+  TrackWiring,
 } from '@/domain/model';
+import { STATION_END_LABEL, STATION_ENDS } from '@/domain/model';
 import { orderedStations, tracksOfStation } from '@/domain/project';
+import { computeStationWiring } from '@/domain/wiring';
 import { entityList, formatKm, kmToMeters, metersToKm } from '@/domain/units';
 import { StationYardChart } from '@/render';
 import { newId } from '@/store/idPool';
@@ -360,6 +363,10 @@ export function StationsScreen() {
           }}
           stations={allStations}
         />
+      </div>
+
+      <div className={styles.columns}>
+        <WiringEditor station={currentStation} />
       </div>
 
       <div className={styles.columns}>
@@ -871,6 +878,139 @@ function TrackEditor({
     </Card>
   );
 }
+
+// ---------------------------------------------------------------------------
+
+/**
+ * 構内配線 — the throats, and where each road meets them.
+ *
+ * Its own card rather than four more columns on the 番線 table, because it
+ * answers a different question. The 番線 table says what a road *is*; this says
+ * how it is connected, and connection is what decides where a 引上線 is drawn
+ * and which pairs of simultaneous moves foul each other.
+ *
+ * Everything here is optional. A row left alone keeps the derived answer, which
+ * is right for a plain two-road station and is stated in the hint so nobody has
+ * to guess what an empty row means.
+ */
+function WiringEditor({ station }: { station: Station | undefined }) {
+  const doc = useDoc();
+  const dispatch = useDispatch();
+  const tracks = station === undefined ? [] : tracksOfStation(doc, station.id);
+  const wiring = useMemo(
+    () => (station === undefined ? undefined : computeStationWiring(doc, station.id)),
+    [doc, station],
+  );
+
+  const patch = (track: StationTrack, next: Partial<TrackWiring>): void => {
+    const current: TrackWiring = track.wiring ?? {
+      ends: wiring?.byTrack.get(track.id)?.ends ?? ['down', 'up'],
+    };
+    dispatch({
+      type: 'track/update',
+      id: track.id,
+      patch: { wiring: { ...current, ...next } },
+    });
+  };
+
+  return (
+    <Card title="構内配線">
+      {station === undefined ? (
+        <p className={styles.empty}>駅を選択してください</p>
+      ) : (
+        <>
+          <div className={styles.tableWrap}>
+            <table className={styles.table} data-testid={TID.wiringList}>
+              <thead>
+                <tr>
+                  <th>番線</th>
+                  <th>下り方</th>
+                  <th>上り方</th>
+                  <th>分岐位置</th>
+                  <th>本線(下)</th>
+                  <th>本線(上)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tracks.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className={styles.empty}>
+                      番線がありません
+                    </td>
+                  </tr>
+                ) : null}
+                {tracks.map((track, i) => {
+                  const road = wiring?.byTrack.get(track.id);
+                  const ends = road?.ends ?? [];
+                  return (
+                    <tr key={track.id} data-testid={TID.wiringRow} data-track-id={track.id}>
+                      <td>{track.name}</td>
+                      {STATION_ENDS.map((end) => (
+                        <td key={end}>
+                          <input
+                            type="checkbox"
+                            data-testid={TID.wiringEnd(track.id, end)}
+                            checked={ends.includes(end)}
+                            aria-label={`${track.name} の${STATION_END_LABEL[end]}接続`}
+                            onChange={(e) =>
+                              patch(track, {
+                                ends: e.currentTarget.checked
+                                  ? STATION_ENDS.filter((x) => x === end || ends.includes(x))
+                                  : ends.filter((x) => x !== end),
+                              })
+                            }
+                          />
+                        </td>
+                      ))}
+                      <td className={styles.num}>
+                        <input
+                          className={styles.narrow}
+                          data-testid={TID.wiringLadder(track.id)}
+                          value={road?.ladder ?? i}
+                          inputMode="numeric"
+                          aria-label={`${track.name} の分岐位置`}
+                          onChange={(e) =>
+                            patch(track, { ladder: Number(e.currentTarget.value) || 0 })
+                          }
+                        />
+                      </td>
+                      {(['down', 'up'] as Direction[]).map((direction) => (
+                        <td key={direction}>
+                          <input
+                            type="checkbox"
+                            data-testid={TID.wiringLine(track.id, direction)}
+                            checked={road?.line.includes(direction) ?? false}
+                            aria-label={`${track.name} に${direction === 'down' ? '下り' : '上り'}本線が入る`}
+                            onChange={(e) => {
+                              const now = road?.line ?? [];
+                              patch(track, {
+                                line: e.currentTarget.checked
+                                  ? [...new Set([...now, direction])]
+                                  : now.filter((d) => d !== direction),
+                              });
+                            }}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className={styles.hint}>
+            下り方・上り方はその端で本線につながるかどうか。片方だけなら引上線などの行き止まりになり、
+            線路配置図でもその端に描かれます。分岐位置は構内での横方向の位置で、ある進路が横切る番線
+            —— 平面交差支障 —— を決めます。本線(下)(上)は、その方向の本線がこの番線にそのまま入る
+            （＝分岐しない）ことを表します。未設定の行は番線の用途と既定番線から推定されます。
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 function BoolCell({
   label,

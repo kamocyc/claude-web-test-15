@@ -124,6 +124,15 @@ function visible(x0: number, x1: number, viewport: Viewport, slop = 60): boolean
   return x1 >= -slop && x0 <= viewport.width + slop;
 }
 
+/** 分岐器 — the mark left where a lead meets the running line. */
+const POINT_DOT_R = 2;
+
+function fillDot(ctx: DrawContext, x: number, y: number): void {
+  ctx.beginPath();
+  ctx.arc(x, y, POINT_DOT_R, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 // ---------------------------------------------------------------------------
 // Static layer
 // ---------------------------------------------------------------------------
@@ -236,6 +245,20 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
           }
         }
         ctx.stroke();
+
+        // The turnout itself, where the lead leaves the running line. It is a
+        // dot rather than a drawn frog because at any zoom this view survives a
+        // frog is two pixels — but *where* the points are is the fact worth
+        // showing: it is the end of the station a road can be reached from, and
+        // it is what two conflicting moves have to share.
+        if (lx1 - lx0 > 12) {
+          ctx.fillStyle = theme.railDim;
+          for (const running of lane.leadLanes) {
+            const ry = crisp(laneY(env, running));
+            if (lane.stubSide >= 0) fillDot(ctx, lx0, ry);
+            if (lane.stubSide <= 0) fillDot(ctx, lx1, ry);
+          }
+        }
       }
 
       // Buffer stop at the dead end, so a stub reads as a stub.

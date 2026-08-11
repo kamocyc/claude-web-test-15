@@ -247,10 +247,22 @@ export const turnbackTrackNotCapable: Rule = {
       if (!p.isReversal) continue;
       const arrivingTrackId = p.arriving.stops[p.arriving.stops.length - 1]?.trackId;
       const departingTrackId = p.departing.stops[0]?.trackId;
-      for (const [trackId, who] of [
-        [arrivingTrackId, p.arriving],
-        [departingTrackId, p.departing],
-      ] as const) {
+      // A reversal shunted into a 引上線 turns *there*. The platform roads are
+      // entered from one end and left from the other, which any road can do —
+      // demanding 折り返し可 of them as well is asking a 相対式 platform to be
+      // something it never has to be, and would make the tail track useless
+      // for the one job it exists to do.
+      const viaTurn = p.viaTrackIds
+        .map((id) => ctx.doc.stationTracks.byId[id])
+        .find((t) => t !== undefined && (t.usage === 'stabling' || t.usage === 'depot'));
+      const checked =
+        viaTurn === undefined
+          ? ([
+              [arrivingTrackId, p.arriving],
+              [departingTrackId, p.departing],
+            ] as const)
+          : ([[viaTurn.id, p.arriving]] as const);
+      for (const [trackId, who] of checked) {
         if (trackId === undefined) continue;
         const track = ctx.doc.stationTracks.byId[trackId];
         if (!track || track.canTurnBack) continue;

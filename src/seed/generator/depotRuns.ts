@@ -263,6 +263,63 @@ export function buildDepotRuns(
   };
 }
 
+/**
+ * One empty move between two stations, pathed into the gaps the timetable
+ * leaves — the same search `buildDepotRuns` uses for a 出庫 or a 入庫, minus the
+ * chain it normally brackets.
+ *
+ * It exists because not every empty move belongs to a chain: a formation held
+ * at 自由が丘 for the middle of the day runs out of the depot and back on its
+ * own account, and doing that by inventing a fake one-node chain would put a
+ * train leg in a duty that has no train.
+ */
+export interface EmptyMoveSpec {
+  fromKey: StationKey;
+  toKey: StationKey;
+  cars: number;
+  /**
+   * `arriveBy` fixes the latest arrival and walks the path earlier, the way a
+   * 出庫 is planned; `departAfter` fixes the earliest departure and walks it
+   * later, the way a 入庫 is.
+   */
+  anchor: { kind: 'arriveBy' | 'departAfter'; at: Sec };
+  markFirst?: TrainStop['operation'];
+  markLast?: TrainStop['operation'];
+  note: string;
+  /** Berth on a 引上線 at the origin / terminus if the station has one free. */
+  preferStablingAtOrigin?: boolean;
+  preferStablingAtTerminus?: boolean;
+}
+
+export function buildEmptyMove(
+  ctx: DepotRunContext,
+  spec: EmptyMoveSpec,
+): { train: Train; shiftSec: number } {
+  const { facts } = ctx;
+  const profileId = facts.profile.car5;
+  const route = routeBetween(facts, spec.fromKey, spec.toKey);
+  const runSec = timeRoute(facts, route, profileId, 0).arr[route.length - 1]!;
+  const number = ctx.nextNumber();
+  return searchPath(ctx, {
+    trainId: ctx.nextTrainId(),
+    number,
+    label: `回 ${number}`,
+    route,
+    profileId,
+    direction: directionOf(facts, route),
+    cars: spec.cars,
+    idealStart: spec.anchor.kind === 'arriveBy' ? spec.anchor.at - runSec : spec.anchor.at,
+    stepSign: spec.anchor.kind === 'arriveBy' ? -1 : +1,
+    markFirst: spec.markFirst,
+    markLast: spec.markLast,
+    note: spec.note,
+    preferStablingAtOrigin: spec.preferStablingAtOrigin ?? false,
+    ...(spec.preferStablingAtTerminus === undefined
+      ? {}
+      : { preferStablingAtTerminus: spec.preferStablingAtTerminus }),
+  });
+}
+
 interface PathRequest {
   trainId: TrainId;
   number: string;

@@ -11,6 +11,7 @@ import {
   connectionDiscovered,
   connectionQualityGap,
 } from './rules/connection';
+import { trackCrossingConflict } from './rules/crossing';
 import { depotAccessTimeViolated, depotCapacityExceeded } from './rules/depot';
 import {
   dutyCarCountMismatch,
@@ -75,6 +76,7 @@ export const RULES: Record<RuleId, Rule> = {
   'track.directionNotAllowed': trackDirectionNotAllowed,
   'track.noPlatform': trackNoPlatform,
   'track.lengthExceeded': trackLengthExceeded,
+  'track.crossingConflict': trackCrossingConflict,
 
   'turnback.insufficient': turnbackInsufficient,
   'turnback.tight': turnbackTight,

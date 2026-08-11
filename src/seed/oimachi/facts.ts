@@ -78,6 +78,7 @@ import type {
   StationTrack,
   StopKind,
   StopPattern,
+  TrackWiring,
   TrainType,
 } from '@/domain/model';
 import { kmToMeters, type Meters } from '@/domain/units';
@@ -167,6 +168,7 @@ type TrackRole = 'om' | 'dt' | 'stabling' | 'depot';
 type LayoutKind =
   | 'terminalStub' // 大井町: 頭端式1面2線
   | 'double' // 相対式/島式 2線
+  | 'jiyugaoka' // 相対式2面2線 + 引上線1 (溝の口方)
   | 'hatanodai' // 島式2面4線 with 待避 both ways
   | 'kaminoge' // 島式1面3線, 上り待避のみ
   | 'futakotamagawa' // 大井町線2線 + 田園都市線2線
@@ -188,6 +190,17 @@ interface TrackSpec {
   approachSec: number;
   clearSec: number;
   role: TrackRole;
+  /**
+   * 構内配線. Stated wherever the derived answer would be wrong: which end a
+   * 引上線 hangs off, where a road sits across the throat, and which 本線 runs
+   * straight into it. See `TrackWiring`.
+   */
+  wiring?: TrackWiring;
+}
+
+/** 本線がそのまま入る番線 — the common case, spelled once. */
+function line(...directions: Direction[]): TrackWiring {
+  return { ends: ['down', 'up'], line: directions };
 }
 
 const MAIN = { approachSec: 30, clearSec: 20 } as const;
@@ -221,12 +234,48 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
     case 'terminalStub':
       // 頭端式1面2線. Both faces of a single island; a train reverses in place,
       // there is no tail track, and that is exactly why 大井町 is the bottleneck.
+      //
+      // Both roads are open at the 下神明 end only — the other end is the
+      // buffer stops — so the 上り本線 fans into both of them and the 下り本線
+      // out of both, and an arrival into the far road crosses a departure out
+      // of the near one. That crossing is the second half of why the terminal
+      // is the bottleneck, and the first thing the 交差支障 check finds here.
       return [
-        omPlatform('1番線', 1, ['down', 'up'], { canTurnBack: true }),
-        omPlatform('2番線', 2, ['down', 'up'], { canTurnBack: true }),
+        omPlatform('1番線', 1, ['down', 'up'], {
+          canTurnBack: true,
+          wiring: { ends: ['down'], ladder: 0, line: ['down'] },
+        }),
+        omPlatform('2番線', 2, ['down', 'up'], {
+          canTurnBack: true,
+          wiring: { ends: ['down'], ladder: 1, line: ['up'] },
+        }),
       ];
     case 'double':
       return [omPlatform('1番線', 1, ['down']), omPlatform('2番線', 2, ['up'])];
+    case 'jiyugaoka':
+      // 相対式2面2線 plus a 引上線 on the 溝の口 side.
+      //
+      // Reconstruction, and stated as such: the real 自由が丘 has no tail track
+      // on the 大井町線. This one is here because a 引上線 whose side and
+      // lateral position are *authored* is the whole point of `TrackWiring` —
+      // the km heuristic would hang it off the 大井町 end, and it sits beyond
+      // the up platform, so every shunt in or out of it crosses the 上り本線.
+      return [
+        omPlatform('1番線', 1, ['down']),
+        omPlatform('2番線', 2, ['up']),
+        {
+          name: '引上線',
+          usage: 'stabling',
+          hasPlatform: false,
+          directions: ['down', 'up'],
+          canTurnBack: true,
+          canBeOvertaken: false,
+          maxCars: 7,
+          ...YARD,
+          role: 'stabling',
+          wiring: { ends: ['down'], ladder: 2 },
+        },
+      ];
     case 'hatanodai':
       // 島式2面4線 方向別. 3・6 = 待避線, 4・5 = 本線 (researched); which
       // number faces which direction is a reconstruction.
@@ -246,6 +295,11 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
     case 'futakotamagawa':
       // Divergence point. 大井町線 trains use 2・3; the 田園都市線 faces are
       // modelled so the 構内ダイヤ looks right but carry no seeded traffic.
+      //
+      // 方向別複々線: each pair carries its own 本線, so a train on either of
+      // them diverges nowhere and crosses nothing. Saying that here is what
+      // stops the 交差支障 check from reading the inner pair as the only 本線
+      // and every 田園都市線 movement as a crossing of it.
       return [
         {
           name: '1番線',
@@ -258,9 +312,10 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...MAIN,
           role: 'dt',
+          wiring: line('down'),
         },
-        omPlatform('2番線', 2, ['down']),
-        omPlatform('3番線', 3, ['up']),
+        omPlatform('2番線', 2, ['down'], { wiring: line('down') }),
+        omPlatform('3番線', 3, ['up'], { wiring: line('up') }),
         {
           name: '4番線',
           number: 4,
@@ -272,6 +327,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...MAIN,
           role: 'dt',
+          wiring: line('up'),
         },
       ];
     case 'noOimachiPlatform':
@@ -290,6 +346,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...MAIN,
           role: 'dt',
+          wiring: line('down'),
         },
         {
           name: '大井町線下り線',
@@ -301,6 +358,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...THRU,
           role: 'om',
+          wiring: line('down'),
         },
         {
           name: '大井町線上り線',
@@ -312,6 +370,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...THRU,
           role: 'om',
+          wiring: line('up'),
         },
         {
           name: '2番線',
@@ -324,11 +383,20 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...MAIN,
           role: 'dt',
+          wiring: line('up'),
         },
       ];
     case 'mizonokuchi':
       // 島式2面4線: outer 1・4 = 田園都市線, inner 2・3 = 大井町線, plus two
       // 引上線 on the 梶が谷 side used for 折り返し and the last 入庫.
+      //
+      // The wiring is the whole terminal. Each 引上線 is the continuation of the
+      // 大井町線 face it serves — 引上1 of 2番線, 引上2 of 3番線 — so it sits at
+      // that road's lateral position and a shunt straight out of the face
+      // crosses nothing. Taking the *other* tail track does cross, which is
+      // exactly the fact the 交差支障 check exists to surface. Both hang off the
+      // 下り方 (梶が谷) end; the km heuristic happens to agree here, and would
+      // not at a station in the 大井町 half of the line.
       return [
         {
           name: '1番線',
@@ -341,9 +409,16 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...MAIN,
           role: 'dt',
+          wiring: { ends: ['down', 'up'], ladder: 0, line: ['down', 'up'] },
         },
-        omPlatform('2番線', 2, ['down', 'up'], { canTurnBack: true }),
-        omPlatform('3番線', 3, ['down', 'up'], { canTurnBack: true }),
+        omPlatform('2番線', 2, ['down', 'up'], {
+          canTurnBack: true,
+          wiring: { ends: ['down', 'up'], ladder: 1, line: ['down'] },
+        }),
+        omPlatform('3番線', 3, ['down', 'up'], {
+          canTurnBack: true,
+          wiring: { ends: ['down', 'up'], ladder: 2, line: ['up'] },
+        }),
         {
           name: '4番線',
           number: 4,
@@ -355,6 +430,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 10,
           ...MAIN,
           role: 'dt',
+          wiring: { ends: ['down', 'up'], ladder: 3, line: ['down', 'up'] },
         },
         {
           name: '引上1号線',
@@ -366,6 +442,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 7,
           ...YARD,
           role: 'stabling',
+          wiring: { ends: ['down'], ladder: 1 },
         },
         {
           name: '引上2号線',
@@ -377,6 +454,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 7,
           ...YARD,
           role: 'stabling',
+          wiring: { ends: ['down'], ladder: 2 },
         },
       ];
     case 'saginumaStation':
@@ -565,10 +643,14 @@ const STATION_SPECS: readonly StationSpec[] = [
     km: 6.4,
     runSecFromPrev: 65,
     minDwellSec: 30,
+    // A 引上線 on the 溝の口 side, so a formation can be turned or held here
+    // without standing on a platform road.
     minTurnbackSec: 180,
     // Same story as 大岡山: the other two faces belong to the 東横線.
-    layout: 'double',
+    layout: 'jiyugaoka',
     transfers: ['東急東横線'],
+    defaultDown: '1番線',
+    defaultUp: '2番線',
   },
   {
     key: 'kuhombutsu',
@@ -981,6 +1063,7 @@ export function buildFacts(): Facts {
         approachSec: t.approachSec,
         clearSec: t.clearSec,
         ...(t.number === undefined ? {} : { number: t.number }),
+        ...(t.wiring === undefined ? {} : { wiring: t.wiring }),
       };
       return track;
     });

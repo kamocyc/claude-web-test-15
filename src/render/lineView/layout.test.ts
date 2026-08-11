@@ -305,6 +305,38 @@ describe('computeLineLayout', () => {
     expect(withSiding.bounds.maxX).toBeGreaterThanOrEqual(stub.x1);
   });
 
+  it('hangs a stub off the end the wiring names, not the end the km implies', () => {
+    // B駅 is in the near half of the toy line, so the heuristic would put a
+    // stub there on the 大井町 side. 自由が丘's is on the other one, and only
+    // the document knows.
+    const doc = toyProjectCopy();
+    doc.stationTracks.byId[TOY.b1] = {
+      ...doc.stationTracks.byId[TOY.b1]!,
+      usage: 'stabling',
+      wiring: { ends: ['down'] },
+    };
+    const b = computeLineLayout(doc).stationOf.get(TOY.stationB)!;
+    const stub = b.trackLanes.find((l) => l.trackId === TOY.b1)!;
+    expect(stubSide(b.km, 0, kmToMeters(3))).toBe(-1);
+    expect(stub.stubSide).toBe(1);
+    expect(stub.x0).toBe(b.x1);
+  });
+
+  it('draws a tail track in line with the road it continues from', () => {
+    // 溝の口 引上1号線 carries on from 2番線 past the buffer end, so it is drawn
+    // carrying on from it — same lane, and beyond the end of the block.
+    const doc = toyProjectCopy();
+    doc.stationTracks.byId[TOY.c3] = {
+      ...doc.stationTracks.byId[TOY.c3]!,
+      usage: 'stabling',
+      wiring: { ends: ['down'], ladder: 0 },
+    };
+    const layoutWithTail = computeLineLayout(doc);
+    expect(layoutWithTail.laneOfTrack.get(TOY.c3)).toBe(layoutWithTail.laneOfTrack.get(TOY.c1));
+    const c = layoutWithTail.stationOf.get(TOY.stationC)!;
+    expect(layoutWithTail.roadOfTrack.get(TOY.c3)!.x0).toBe(c.x1);
+  });
+
   it('gives each 引上線 an inner lane of its own', () => {
     // 溝の口 has four roads through it and two tail tracks. Counting all six
     // as through roads made the stack six deep and put a tail track on the up
