@@ -2,17 +2,48 @@
  * Schema migrations.
  *
  * `MIGRATIONS[n]` upgrades a document written at version `n` to version `n+1`.
- * v1 is the current version so the table is empty, but the loop stays: adding
- * v2 later must be a one-line change, not a redesign of the import path.
  */
 
+import { DEFAULT_VALIDATION_CONFIG } from '@/domain/project';
 import { SCHEMA_VERSION } from '@/domain/model';
 
 export type RawDocument = Record<string, unknown>;
 export type Migration = (raw: RawDocument) => RawDocument;
 
+const CREW_CONFIG_KEYS = [
+  'crewMaxContinuousWorkSec',
+  'crewMinBreakSec',
+  'crewMinTotalBreakSec',
+  'crewMaxSpreadSec',
+  'crewMaxWorkSec',
+  'crewMinHandoverSec',
+  'crewSignOnSec',
+  'crewSignOffSec',
+] as const;
+
 export const MIGRATIONS: Record<number, Migration> = {
-  // 1: (raw) => ({ ...raw, schemaVersion: 2, /* ... */ }),
+  /**
+   * v2 added 乗務員. A v1 document has no crew of any kind, which is a
+   * perfectly good v2 document — three empty collections and the default
+   * working rules. Existing values are kept, so a file written by a build
+   * that already had some of these keys is not overwritten.
+   */
+  1: (raw) => {
+    const cfg = (typeof raw['validationConfig'] === 'object' && raw['validationConfig'] !== null
+      ? (raw['validationConfig'] as Record<string, unknown>)
+      : {}) satisfies Record<string, unknown>;
+    const filled: Record<string, unknown> = { ...cfg };
+    for (const key of CREW_CONFIG_KEYS) {
+      if (typeof filled[key] !== 'number') filled[key] = DEFAULT_VALIDATION_CONFIG[key];
+    }
+    return {
+      ...raw,
+      validationConfig: filled,
+      crew: raw['crew'] ?? { byId: {}, allIds: [] },
+      crewDuties: raw['crewDuties'] ?? { byId: {}, allIds: [] },
+      crewAssignments: raw['crewAssignments'] ?? { byId: {}, allIds: [] },
+    };
+  },
 };
 
 export interface MigrateResult {

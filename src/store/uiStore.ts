@@ -84,6 +84,8 @@ const ROUTE_FOR_KIND: Record<EntityRef['kind'], RouteName[]> = {
   formation: [ROUTES.formations, ROUTES.duties],
   depot: [ROUTES.stations, ROUTES.line],
   inspection: [ROUTES.inspections, ROUTES.formations],
+  crewDuty: [ROUTES.crew, ROUTES.diagram],
+  crew: [ROUTES.crew],
 };
 
 export function refKey(ref: EntityRef): string {
@@ -104,6 +106,10 @@ export function refKey(ref: EntityRef): string {
       return `depot:${ref.depotId}`;
     case 'inspection':
       return `inspection:${ref.formationId}:${ref.ruleId}`;
+    case 'crewDuty':
+      return `crewDuty:${ref.crewDutyId}`;
+    case 'crew':
+      return `crew:${ref.crewId}`;
     default:
       return JSON.stringify(ref);
   }

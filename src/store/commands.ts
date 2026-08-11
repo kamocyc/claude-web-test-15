@@ -10,6 +10,9 @@
 
 import type {
   AssignmentId,
+  CrewAssignmentId,
+  CrewDutyId,
+  CrewId,
   DayTypeId,
   DepotId,
   DutyId,
@@ -26,6 +29,10 @@ import type {
   TrainTypeId,
 } from '@/domain/ids';
 import type {
+  Crew,
+  CrewDuty,
+  CrewLeg,
+  CrewRole,
   Depot,
   Duty,
   DutyLeg,
@@ -109,6 +116,24 @@ export type Command =
   | { type: 'duty/remove'; dutyIds: DutyId[] }
   | { type: 'duty/autoAssign'; dayTypeId: DayTypeId }
 
+  // 乗務員 ----------------------------------------------------------------
+  | { type: 'crewDuty/add'; duty: CrewDuty }
+  | { type: 'crewDuty/addMany'; duties: CrewDuty[] }
+  | { type: 'crewDuty/update'; id: CrewDutyId; patch: Partial<Omit<CrewDuty, 'legs'>> }
+  | { type: 'crewDuty/insertLeg'; crewDutyId: CrewDutyId; leg: CrewLeg; atIndex?: number }
+  | { type: 'crewDuty/replaceLeg'; crewDutyId: CrewDutyId; legIndex: number; leg: CrewLeg }
+  | { type: 'crewDuty/removeLeg'; crewDutyId: CrewDutyId; legIndex: number }
+  | { type: 'crewDuty/reorderLegs'; crewDutyId: CrewDutyId; order: number[] }
+  | { type: 'crewDuty/sortLegsByTime'; crewDutyId: CrewDutyId }
+  | { type: 'crewDuty/remove'; crewDutyIds: CrewDutyId[] }
+  | { type: 'crewDuty/autoAssign'; dayTypeId: DayTypeId; role: CrewRole }
+  | { type: 'crew/add'; crew: Crew }
+  | { type: 'crew/update'; id: CrewId; patch: Partial<Crew> }
+  | { type: 'crew/remove'; id: CrewId }
+  | { type: 'crewAssignment/set'; id: CrewAssignmentId; date: IsoDate; crewDutyId: CrewDutyId; crewId: CrewId }
+  | { type: 'crewAssignment/clear'; date: IsoDate; crewDutyId: CrewDutyId }
+  | { type: 'crewAssignment/autoFill'; date: IsoDate }
+
   // rolling stock --------------------------------------------------------
   | { type: 'series/add'; series: FormationSeries }
   | { type: 'series/update'; id: SeriesId; patch: Partial<FormationSeries> }
@@ -188,6 +213,22 @@ export const COMMAND_LABEL: Record<string, string> = {
   'duty/sortLegsByTime': '運用を時刻順に整列',
   'duty/remove': '運用を削除',
   'duty/autoAssign': '運用を自動組成',
+  'crewDuty/add': '乗務員行路を追加',
+  'crewDuty/addMany': '乗務員行路を一括追加',
+  'crewDuty/update': '乗務員行路を変更',
+  'crewDuty/insertLeg': '乗務員行路に追加',
+  'crewDuty/replaceLeg': '乗務員行路を変更',
+  'crewDuty/removeLeg': '乗務員行路から削除',
+  'crewDuty/reorderLegs': '乗務員行路を並べ替え',
+  'crewDuty/sortLegsByTime': '乗務員行路を時刻順に整列',
+  'crewDuty/remove': '乗務員行路を削除',
+  'crewDuty/autoAssign': '乗務員行路を自動組成',
+  'crew/add': '乗務員を追加',
+  'crew/update': '乗務員を変更',
+  'crew/remove': '乗務員を削除',
+  'crewAssignment/set': '乗務担当を設定',
+  'crewAssignment/clear': '乗務担当を解除',
+  'crewAssignment/autoFill': '乗務担当を自動設定',
   'series/add': '形式を追加',
   'series/update': '形式を変更',
   'series/remove': '形式を削除',
@@ -216,7 +257,7 @@ export const COMMAND_LABEL: Record<string, string> = {
 export function scopesOf(cmd: Command): readonly import('@/validation/types').RuleScope[] {
   switch (cmd.type) {
     case 'project/replace':
-      return ['infrastructure', 'types', 'trains', 'tracks', 'duties', 'formations', 'inspections', 'calendar'];
+      return ['infrastructure', 'types', 'trains', 'tracks', 'duties', 'formations', 'inspections', 'calendar', 'crew'];
     case 'station/add':
     case 'station/update':
     case 'station/remove':
@@ -230,7 +271,7 @@ export function scopesOf(cmd: Command): readonly import('@/validation/types').Ru
     case 'depot/add':
     case 'depot/update':
     case 'depot/remove':
-      return ['infrastructure', 'trains', 'tracks', 'duties'];
+      return ['infrastructure', 'trains', 'tracks', 'duties', 'crew'];
     case 'track/add':
     case 'track/update':
     case 'track/remove':
@@ -255,6 +296,23 @@ export function scopesOf(cmd: Command): readonly import('@/validation/types').Ru
     case 'duty/remove':
     case 'duty/autoAssign':
       return ['duties', 'formations', 'inspections'];
+    case 'crewDuty/add':
+    case 'crewDuty/addMany':
+    case 'crewDuty/update':
+    case 'crewDuty/insertLeg':
+    case 'crewDuty/replaceLeg':
+    case 'crewDuty/removeLeg':
+    case 'crewDuty/reorderLegs':
+    case 'crewDuty/sortLegsByTime':
+    case 'crewDuty/remove':
+    case 'crewDuty/autoAssign':
+    case 'crew/add':
+    case 'crew/update':
+    case 'crew/remove':
+    case 'crewAssignment/set':
+    case 'crewAssignment/clear':
+    case 'crewAssignment/autoFill':
+      return ['crew'];
     case 'series/add':
     case 'series/update':
     case 'series/remove':
@@ -278,7 +336,7 @@ export function scopesOf(cmd: Command): readonly import('@/validation/types').Ru
     case 'calendar/set':
       return ['calendar', 'trains', 'duties', 'formations'];
     default:
-      return ['trains', 'tracks', 'duties'];
+      return ['trains', 'tracks', 'duties', 'crew'];
   }
 }
 
@@ -299,6 +357,9 @@ export function mergeKeyOf(cmd: Command): string | undefined {
     case 'trainType/update':
       return `${cmd.type}:${cmd.id}`;
     case 'formation/update':
+      return `${cmd.type}:${cmd.id}`;
+    case 'crew/update':
+    case 'crewDuty/update':
       return `${cmd.type}:${cmd.id}`;
     case 'train/shift':
       return `${cmd.type}:${cmd.trainIds.join(',')}`;

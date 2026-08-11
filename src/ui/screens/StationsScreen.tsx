@@ -7,13 +7,16 @@ import { useMemo, useState } from 'react';
 import { TID } from '@e2e/testids';
 
 import { ID_PREFIX } from '@/domain/ids';
-import type { PerfProfileId, StationId } from '@/domain/ids';
+import type { PerfProfileId, StationId, StationTrackId } from '@/domain/ids';
 import type {
   Depot,
   Direction,
   PerfProfile,
   Station,
+  StationCrossover,
+  StationEnd,
   StationTrack,
+  ThroatLead,
   TrackUsage,
   TrackWiring,
 } from '@/domain/model';
@@ -21,7 +24,7 @@ import { STATION_END_LABEL, STATION_ENDS } from '@/domain/model';
 import { orderedStations, tracksOfStation } from '@/domain/project';
 import { computeStationWiring } from '@/domain/wiring';
 import { entityList, formatKm, kmToMeters, metersToKm } from '@/domain/units';
-import { StationYardChart } from '@/render';
+import { StationWiringDiagram, StationYardChart } from '@/render';
 import { newId } from '@/store/idPool';
 import { useUiStore } from '@/store/uiStore';
 import { Card, CheckField, Field } from '../components/Field';
@@ -230,6 +233,8 @@ export function StationsScreen() {
                   <th>最小停車</th>
                   <th>最小折返</th>
                   <th>接続駅</th>
+                  <th>乗務員交代</th>
+                  <th>乗務員基地</th>
                   <th>番線</th>
                   <th />
                 </tr>
@@ -350,6 +355,41 @@ export function StationsScreen() {
                             type: 'station/update',
                             id: station.id,
                             patch: { isConnectionPoint: e.currentTarget.checked },
+                          })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        data-testid={TID.stationCrewChange(station.id)}
+                        checked={station.crewChange === true || station.crewBase === true}
+                        disabled={station.crewBase === true}
+                        aria-label={`${station.name} は乗務員交代可能駅`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'station/update',
+                            id: station.id,
+                            patch: e.currentTarget.checked
+                              ? { crewChange: true }
+                              : clearing<Station>('crewChange'),
+                          })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        data-testid={TID.stationCrewBase(station.id)}
+                        checked={station.crewBase === true}
+                        aria-label={`${station.name} は乗務員基地`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'station/update',
+                            id: station.id,
+                            patch: e.currentTarget.checked
+                              ? { crewBase: true }
+                              : clearing<Station>('crewBase'),
                           })
                         }
                       />
@@ -902,6 +942,11 @@ function TrackEditor({
  * how it is connected, and connection is what decides where a 引上線 is drawn
  * and which pairs of simultaneous moves foul each other.
  *
+ * Two views of one set of facts. The 配線図 is the one to reach for — drag a
+ * road to move it across the throat, click a 分岐器 to cut it — and the table
+ * beneath is the exact one, for the things a picture cannot say precisely: the
+ * name of a lead, which end a road reaches at all, which 本線 runs straight in.
+ *
  * Everything here is optional. A row left alone keeps the derived answer, which
  * is right for a plain two-road station and is stated in the hint so nobody has
  * to guess what an empty row means.
@@ -909,6 +954,7 @@ function TrackEditor({
 function WiringEditor({ station }: { station: Station | undefined }) {
   const doc = useDoc();
   const dispatch = useDispatch();
+  const [picked, setPicked] = useState<StationTrackId | undefined>(undefined);
   const tracks = station === undefined ? [] : tracksOfStation(doc, station.id);
   const wiring = useMemo(
     () => (station === undefined ? undefined : computeStationWiring(doc, station.id)),
@@ -926,12 +972,64 @@ function WiringEditor({ station }: { station: Station | undefined }) {
     });
   };
 
+  /**
+   * Writing a 接続先 list has to write the *other* end too.
+   *
+   * `connects` defaults per end, so storing one end alone would silently leave
+   * the other on its derived value and then freeze it the moment the derivation
+   * changed. Both are written from what is currently in force, which is what
+   * the editor is showing.
+   */
+  const setLeads = (track: StationTrack, end: StationEnd, leads: ThroatLead[]): void => {
+    const road = wiring?.byTrack.get(track.id);
+    const other: StationEnd = end === 'down' ? 'up' : 'down';
+    const connects: Partial<Record<StationEnd, ThroatLead[]>> = {
+      [end]: leads,
+      [other]: road?.connects[other] ?? track.directions,
+    };
+    patch(track, { connects });
+  };
+
+  const toggleLead = (trackId: StationTrackId, end: StationEnd, lead: ThroatLead): void => {
+    const track = tracks.find((t) => t.id === trackId);
+    const road = wiring?.byTrack.get(trackId);
+    if (track === undefined || road === undefined) return;
+    const now = road.connects[end];
+    setLeads(track, end, now.includes(lead) ? now.filter((l) => l !== lead) : [...now, lead]);
+  };
+
+  const setCrossovers = (next: StationCrossover[]): void => {
+    if (station === undefined) return;
+    dispatch({
+      type: 'station/update',
+      id: station.id,
+      patch: next.length === 0 ? clearing<Station>('crossovers') : { crossovers: next },
+    });
+  };
+
   return (
     <Card title="構内配線">
       {station === undefined ? (
         <p className={styles.empty}>駅を選択してください</p>
       ) : (
         <>
+          <StationWiringDiagram
+            doc={doc}
+            stationId={station.id}
+            selectedTrackId={picked}
+            onSelect={setPicked}
+            onMoveLadder={(trackId, ladder) => {
+              const track = tracks.find((t) => t.id === trackId);
+              if (track !== undefined) patch(track, { ladder });
+            }}
+            onToggleLead={toggleLead}
+          />
+          <p className={styles.hint}>
+            番線を上下にドラッグすると分岐位置が変わります。●は分岐器で、クリックするとその接続を切ります。
+            番線を選ぶと、その番線に出入りする進路が横切る範囲を塗り、横切られる番線を色で示します
+            —— それが平面交差支障の判定そのものです。
+          </p>
+
           <div className={styles.tableWrap}>
             <table className={styles.table} data-testid={TID.wiringList}>
               <thead>
@@ -940,6 +1038,8 @@ function WiringEditor({ station }: { station: Station | undefined }) {
                   <th>下り方</th>
                   <th>上り方</th>
                   <th>分岐位置</th>
+                  <th>接続先(下り方)</th>
+                  <th>接続先(上り方)</th>
                   <th>本線(下)</th>
                   <th>本線(上)</th>
                 </tr>
@@ -947,7 +1047,7 @@ function WiringEditor({ station }: { station: Station | undefined }) {
               <tbody>
                 {tracks.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className={styles.empty}>
+                    <td colSpan={8} className={styles.empty}>
                       番線がありません
                     </td>
                   </tr>
@@ -987,6 +1087,17 @@ function WiringEditor({ station }: { station: Station | undefined }) {
                           }
                         />
                       </td>
+                      {STATION_ENDS.map((end) => (
+                        <td key={end}>
+                          <input
+                            data-testid={TID.wiringConnects(track.id, end)}
+                            value={(road?.connects[end] ?? []).map(leadText).join(' ')}
+                            aria-label={`${track.name} の${STATION_END_LABEL[end]}接続先`}
+                            disabled={!ends.includes(end)}
+                            onChange={(e) => setLeads(track, end, parseLeads(e.currentTarget.value))}
+                          />
+                        </td>
+                      ))}
                       {(['down', 'up'] as Direction[]).map((direction) => (
                         <td key={direction}>
                           <input
@@ -1012,14 +1123,152 @@ function WiringEditor({ station }: { station: Station | undefined }) {
             </table>
           </div>
           <p className={styles.hint}>
-            下り方・上り方はその端で本線につながるかどうか。片方だけなら引上線などの行き止まりになり、
+            下り方・上り方はその端に線路が届くかどうか。片方だけなら引上線などの行き止まりになり、
             線路配置図でもその端に描かれます。分岐位置は構内での横方向の位置で、ある進路が横切る番線
-            —— 平面交差支障 —— を決めます。本線(下)(上)は、その方向の本線がこの番線にそのまま入る
-            （＝分岐しない）ことを表します。未設定の行は番線の用途と既定番線から推定されます。
+            —— 平面交差支障 —— を決めます。接続先はその端で何につながるかで、「下り」「上り」は本線
+            そのもの、それ以外は本線でないリードの名前です（溝の口の「大井町線」は2・3番線と2本の
+            引上線が共有し、梶が谷方には続きません）。本線(下)(上)は、その方向の本線がこの番線に
+            そのまま入る（＝分岐しない）ことを表します。未設定の行は番線の用途と既定番線から
+            推定されます。
           </p>
+
+          <CrossoverEditor station={station} onChange={setCrossovers} />
         </>
       )}
     </Card>
+  );
+}
+
+/** '下り 上り 大井町線' ⇄ ['down','up','大井町線']. */
+function leadText(lead: ThroatLead): string {
+  return lead === 'down' ? '下り' : lead === 'up' ? '上り' : lead;
+}
+
+function parseLeads(text: string): ThroatLead[] {
+  const out: ThroatLead[] = [];
+  for (const word of text.split(/[\s,、]+/)) {
+    const w = word.trim();
+    if (w === '') continue;
+    const lead = w === '下り' || w === 'down' ? 'down' : w === '上り' || w === 'up' ? 'up' : w;
+    if (!out.includes(lead)) out.push(lead);
+  }
+  return out;
+}
+
+/**
+ * 渡り線 — the pointwork that belongs to no road.
+ *
+ * A short list rather than anything cleverer, because a station has one or two
+ * of these and each is three words: which throat, and the two leads it joins.
+ * Where they sit is not authored at all — a crossover is drawn beyond every
+ * road turnout in its throat, which is where one is.
+ */
+function CrossoverEditor({
+  station,
+  onChange,
+}: {
+  station: Station;
+  onChange: (next: StationCrossover[]) => void;
+}) {
+  const list = station.crossovers ?? [];
+  return (
+    <div className={styles.tableWrap}>
+      <table className={styles.table} data-testid={TID.wiringCrossoverList}>
+        <thead>
+          <tr>
+            <th>渡り線</th>
+            <th>位置</th>
+            <th>接続元</th>
+            <th>接続先</th>
+            <th>名前</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {list.length === 0 ? (
+            <tr>
+              <td colSpan={6} className={styles.empty}>
+                渡り線はありません
+              </td>
+            </tr>
+          ) : null}
+          {list.map((crossover, index) => {
+            const edit = (next: Partial<StationCrossover>): void =>
+              onChange(list.map((c, i) => (i === index ? { ...c, ...next } : c)));
+            return (
+              <tr key={`${crossover.end}-${index}`}>
+                <td>{index + 1}</td>
+                <td>
+                  <select
+                    value={crossover.end}
+                    aria-label={`渡り線 ${index + 1} の位置`}
+                    onChange={(e) => edit({ end: e.currentTarget.value as StationEnd })}
+                  >
+                    {STATION_ENDS.map((end) => (
+                      <option key={end} value={end}>
+                        {STATION_END_LABEL[end]}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td>
+                  <input
+                    value={leadText(crossover.from)}
+                    aria-label={`渡り線 ${index + 1} の接続元`}
+                    onChange={(e) => edit({ from: parseLeads(e.currentTarget.value)[0] ?? 'up' })}
+                  />
+                </td>
+                <td>
+                  <input
+                    value={leadText(crossover.to)}
+                    aria-label={`渡り線 ${index + 1} の接続先`}
+                    onChange={(e) => edit({ to: parseLeads(e.currentTarget.value)[0] ?? 'down' })}
+                  />
+                </td>
+                <td>
+                  <input
+                    value={crossover.name ?? ''}
+                    aria-label={`渡り線 ${index + 1} の名前`}
+                    onChange={(e) => {
+                      const name = e.currentTarget.value;
+                      onChange(
+                        list.map((c, i) => {
+                          if (i !== index) return c;
+                          const { name: _drop, ...rest } = c;
+                          return name === '' ? rest : { ...rest, name };
+                        }),
+                      );
+                    }}
+                  />
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className={styles.danger}
+                    data-testid={TID.wiringCrossoverRemove(index)}
+                    onClick={() => onChange(list.filter((_, i) => i !== index))}
+                  >
+                    削除
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className={styles.chipRow}>
+        {STATION_ENDS.map((end) => (
+          <button
+            key={end}
+            type="button"
+            data-testid={TID.wiringCrossoverAdd(end)}
+            onClick={() => onChange([...list, { end, from: 'up', to: 'down' }])}
+          >
+            {STATION_END_LABEL[end]}に渡り線を追加
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

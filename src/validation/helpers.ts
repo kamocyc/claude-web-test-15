@@ -7,6 +7,8 @@
  */
 
 import type {
+  CrewDutyId,
+  CrewId,
   DepotId,
   DutyId,
   FormationId,
@@ -46,6 +48,16 @@ export function trainName(doc: ProjectDocument, id: TrainId | undefined): string
 export function dutyName(doc: ProjectDocument, id: DutyId | undefined): string {
   const duty = id !== undefined ? doc.duties.byId[id] : undefined;
   return duty ? `運用 ${duty.code}` : `運用 ${String(id ?? '不明')}`;
+}
+
+export function crewDutyName(doc: ProjectDocument, id: CrewDutyId | undefined): string {
+  const duty = id !== undefined ? doc.crewDuties.byId[id] : undefined;
+  return duty ? `乗務員行路 ${duty.code}` : `乗務員行路 ${String(id ?? '不明')}`;
+}
+
+export function crewName(doc: ProjectDocument, id: CrewId | undefined): string {
+  const person = id !== undefined ? doc.crew.byId[id] : undefined;
+  return person ? `乗務員 ${person.code} ${person.name}` : `乗務員 ${String(id ?? '不明')}`;
 }
 
 export function formationName(doc: ProjectDocument, id: FormationId | undefined): string {

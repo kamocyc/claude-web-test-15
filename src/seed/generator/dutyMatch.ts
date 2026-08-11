@@ -25,13 +25,22 @@
 import type { StationId, TrainId } from '@/domain/ids';
 import type { Sec } from '@/domain/units';
 
-export interface DutyNode {
+/**
+ * The part of a node the cover itself needs: where it starts and finishes, and
+ * when. Everything that decides whether two nodes may be joined lives in
+ * `compatible`, because "may the same *formation* work both" and "may the same
+ * *person* work both" are genuinely different questions over the same graph.
+ */
+export interface PathNode {
   trainId: TrainId;
-  key: string;
   originStationId: StationId;
   terminusStationId: StationId;
   depSec: Sec;
   arrSec: Sec;
+}
+
+export interface DutyNode extends PathNode {
+  key: string;
   cars: number;
   /**
    * Which pair of rails the train uses where the line is 方向別複々線. At 溝の口
@@ -44,8 +53,8 @@ export interface DutyNode {
   routing: 'om' | 'dt';
 }
 
-export interface PathCoverOptions {
-  /** 折り返し時分 at the station where the formation changes trains. */
+export interface PathCoverOptions<N extends PathNode> {
+  /** 折り返し時分 at the station where the resource changes trains. */
   turnaroundSec: (stationId: StationId) => number;
   /**
    * Beyond this the formation would go back to the depot instead — per
@@ -54,10 +63,22 @@ export interface PathCoverOptions {
    * bound is far tighter than 溝の口's.
    */
   maxLayoverSec: (stationId: StationId) => number;
+  /**
+   * May B follow A at all, beyond meeting in space and time? Defaults to yes.
+   * The 運用 caller asks for equal car counts and the same pair of rails; the
+   * 乗務員 caller asks only that the station allows a crew change, because a
+   * person steps off a 5-car 各停 and onto a 7-car 急行 without difficulty.
+   */
+  compatible?: (a: N, b: N) => boolean;
+  /**
+   * Terminals whose arrivals are re-paired into FIFO order together. Defaults
+   * to one bucket per station; the 運用 caller splits 溝の口 by pair of rails.
+   */
+  fifoKey?: (node: N) => string;
 }
 
-export interface PathCoverResult {
-  chains: DutyNode[][];
+export interface PathCoverResult<N extends PathNode> {
+  chains: N[][];
   matchedEdges: number;
 }
 
@@ -84,10 +105,11 @@ export interface PathCoverResult {
  * terminal. It is the one change that makes a dense stub terminal feasible
  * without touching the timetable.
  */
-function fifoAtEachStation(
-  nodes: readonly DutyNode[],
+function fifoAtEachStation<N extends PathNode>(
+  nodes: readonly N[],
   matchLeft: Int32Array,
   matchRight: Int32Array,
+  fifoKey: (node: N) => string,
 ): void {
   // Keyed by station AND routing: the two pairs of faces at 溝の口 are separate
   // terminals as far as a formation is concerned, and re-pairing across them
@@ -95,7 +117,7 @@ function fifoAtEachStation(
   const byStation = new Map<string, number[]>();
   for (let i = 0; i < nodes.length; i++) {
     if (matchLeft[i] === -1) continue;
-    const key = `${nodes[i]!.terminusStationId}|${nodes[i]!.routing}`;
+    const key = `${nodes[i]!.terminusStationId}|${fifoKey(nodes[i]!)}`;
     const list = byStation.get(key);
     if (list) list.push(i);
     else byStation.set(key, [i]);
@@ -123,15 +145,17 @@ function fifoAtEachStation(
   }
 }
 
-export function minimumPathCover(
-  input: readonly DutyNode[],
-  opts: PathCoverOptions,
-): PathCoverResult {
+export function minimumPathCover<N extends PathNode>(
+  input: readonly N[],
+  opts: PathCoverOptions<N>,
+): PathCoverResult<N> {
   const nodes = [...input].sort(
     (a, b) => a.depSec - b.depSec || a.trainId.localeCompare(b.trainId),
   );
   const n = nodes.length;
   if (n === 0) return { chains: [], matchedEdges: 0 };
+  const compatible = opts.compatible ?? (() => true);
+  const fifoKey = opts.fifoKey ?? (() => '');
 
   // -- adjacency ------------------------------------------------------------
   const adjacency: number[][] = [];
@@ -143,9 +167,8 @@ export function minimumPathCover(
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
       const b = nodes[j]!;
-      if (b.cars !== a.cars) continue;
       if (b.originStationId !== a.terminusStationId) continue;
-      if (b.routing !== a.routing) continue;
+      if (!compatible(a, b)) continue;
       const layover = b.depSec - a.arrSec;
       if (layover < turn || layover > maxLayover) continue;
       candidates.push({ j, layover });
@@ -185,13 +208,13 @@ export function minimumPathCover(
   }
 
   // -- FIFO at every turnback point -----------------------------------------
-  fifoAtEachStation(nodes, matchLeft, matchRight);
+  fifoAtEachStation(nodes, matchLeft, matchRight, fifoKey);
 
   // -- chains ---------------------------------------------------------------
-  const chains: DutyNode[][] = [];
+  const chains: N[][] = [];
   for (let i = 0; i < n; i++) {
     if (matchRight[i] !== -1) continue; // has a predecessor: not a chain head
-    const chain: DutyNode[] = [];
+    const chain: N[] = [];
     let cur = i;
     for (;;) {
       chain.push(nodes[cur]!);

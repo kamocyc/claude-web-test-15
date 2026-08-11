@@ -49,6 +49,16 @@ const CONFIG_FIELDS: Array<{
   { key: 'connectionMaxWaitSec', label: '最大待ち時間(秒)' },
   { key: 'overtakeClearanceSec', label: '待避の間合い(秒)' },
   { key: 'inspectionWarnRatio', label: '検査警告の比率', step: 0.05 },
+  // 乗務員. These are an operator's agreement rather than a fact about
+  // railways, which is exactly why they are here and not in the rules.
+  { key: 'crewMaxContinuousWorkSec', label: '連続乗務の上限(秒)' },
+  { key: 'crewMinBreakSec', label: '休憩1回の最低(秒)' },
+  { key: 'crewMinTotalBreakSec', label: '休憩の合計の最低(秒)' },
+  { key: 'crewMaxSpreadSec', label: '拘束時間の上限(秒)' },
+  { key: 'crewMaxWorkSec', label: '実乗務時間の上限(秒)' },
+  { key: 'crewMinHandoverSec', label: '乗り継ぎの最低(秒)' },
+  { key: 'crewSignOnSec', label: '出勤点呼(秒)' },
+  { key: 'crewSignOffSec', label: '退勤点呼(秒)' },
 ];
 
 export function SettingsScreen() {

@@ -31,6 +31,8 @@ import type {
 } from '@/domain/ids';
 import type {
   Assignment,
+  Crew,
+  CrewAssignment,
   Duty,
   DutyLeg,
   Formation,
@@ -52,6 +54,7 @@ import {
   type Routing,
   type TurnbackLink,
 } from './generator/trackAssign';
+import { buildCrewDuties } from './generator/crewDuties';
 import { minimumPathCover, type DutyNode } from './generator/dutyMatch';
 import {
   buildDepotRuns,
@@ -145,6 +148,14 @@ export interface BuildReport {
   maxDepotShiftSec: number;
   depotPeakStabled: number;
   depotCapacityExceeded: boolean;
+  crewDuties: number;
+  /** Chains split because carrying on would break a working limit. */
+  crewWorkLimitCuts: number;
+  /** Chains split again because the duty owed a 休憩 it did not have. */
+  crewBreakCuts: number;
+  crewBreakLegs: number;
+  crewDeadheadLegs: number;
+  crewWorkHours: number;
   perBand: Array<{ bandId: string; name: string; trains: number; down: number; up: number; tph: number }>;
 }
 
@@ -170,6 +181,9 @@ export function buildOimachiProject(): ProjectDocument {
   const nextFormationId = makeIdFactory(ID_PREFIX.formation);
   const nextAssignmentId = makeIdFactory(ID_PREFIX.assignment);
   const nextRecordId = makeIdFactory(ID_PREFIX.inspectionRecord);
+  const nextCrewDutyId = makeIdFactory(ID_PREFIX.crewDuty);
+  const nextCrewId = makeIdFactory(ID_PREFIX.crew);
+  const nextCrewAssignmentId = makeIdFactory(ID_PREFIX.crewAssignment);
 
   // -- 1. trains ------------------------------------------------------------
   const specs = expandBands(plan.bands, plan.patterns, () => nextTrainId<'Train'>());
@@ -266,10 +280,14 @@ export function buildOimachiProject(): ProjectDocument {
   const pools: Array<{ cars: number; chains: DutyNode[][] }> = [CARS.express, CARS.local].map(
     (cars) => ({
       cars,
-      chains: minimumPathCover(
-        nodes.filter((n) => n.cars === cars),
-        { turnaroundSec, maxLayoverSec: terminalLayoverCap },
-      ).chains,
+      chains: minimumPathCover<DutyNode>(nodes.filter((n) => n.cars === cars), {
+        turnaroundSec,
+        maxLayoverSec: terminalLayoverCap,
+        // A formation cannot change length, and cannot cross between the
+        // 大井町線 and 田園都市線 pairs at 溝の口 without a shunt.
+        compatible: (a, b) => b.cars === a.cars && b.routing === a.routing,
+        fifoKey: (n) => n.routing,
+      }).chains,
     }),
   );
 
@@ -526,18 +544,40 @@ export function buildOimachiProject(): ProjectDocument {
           // The 出庫 is pinned to the road its first train leaves from, so the
           // wait after it needs no berth of its own — it is already booked.
           if (wait >= berthAfterSec(prevStation) || (outShunted && wait > 0)) {
-            legs.push(
-              berthOn(
-                prevStation,
-                outShunted ? outTrackId : firstTrackId,
-                runs.out.id,
-                prevTrainId,
-                pool.cars,
-                prevRouting,
-                prevEnd,
-                node.depSec,
-              ),
-            );
+            // Where it could not be pinned, the empty move came in on a tail
+            // track and the stock crosses to the face a turn margin before the
+            // service departure. Two legs, because that is two roads and the
+            // 構内ダイヤ has to show the 入換 between them — booking the tail
+            // track for the whole wait instead is what filled both 引上線 at
+            // 溝の口 and put the terminal into 二重使用.
+            const cross = Math.max(node.depSec - DEPOT_TURN_MARGIN_SEC, prevEnd);
+            if (outShunted && firstTrackId !== undefined && cross > prevEnd) {
+              legs.push(
+                berthOn(
+                  prevStation, outTrackId, runs.out.id, prevTrainId,
+                  pool.cars, prevRouting, prevEnd, cross,
+                ),
+              );
+              legs.push(
+                berthOn(
+                  prevStation, firstTrackId, node.trainId, prevTrainId,
+                  pool.cars, prevRouting, cross, node.depSec,
+                ),
+              );
+            } else {
+              legs.push(
+                berthOn(
+                  prevStation,
+                  outShunted ? outTrackId : firstTrackId,
+                  runs.out.id,
+                  prevTrainId,
+                  pool.cars,
+                  prevRouting,
+                  prevEnd,
+                  node.depSec,
+                ),
+              );
+            }
           }
         } else {
           // A 折り返し inside the chain: either the tail track claimed above, or
@@ -577,20 +617,42 @@ export function buildOimachiProject(): ProjectDocument {
       const inWait = inDep - prevEnd;
       if (inWait >= berthAfterSec(prevStation) || (inShunted && inWait > 0)) {
         // Likewise the 入庫 is pinned to the road its last train arrived on —
-        // unless it could not be, in which case the berth is the road it did
-        // find, so the shunt out of the platform is in the plan.
-        legs.push(
-          berthOn(
-            prevStation,
-            inShunted ? inFirst.trackId : lastTrackId,
-            inShunted ? runs.in.id : prevTrainId,
-            prevTrainId,
-            pool.cars,
-            prevRouting,
-            prevEnd,
-            inDep,
-          ),
-        );
+        // unless it could not be, in which case the stock stays on the face it
+        // arrived at and shunts to the tail track a turn margin before the
+        // empty move sets off. The mirror image of the 出庫 above.
+        // Mirror image of the 出庫, so the crossing instant mirrors too: the
+        // stock clears the face a turn margin AFTER it arrives, not a turn
+        // margin before the empty move leaves. Which way round it goes is the
+        // difference between a platform held for four minutes and a platform
+        // held for a quarter of an hour, and the platform is the scarce one.
+        const cross = Math.min(prevEnd + DEPOT_TURN_MARGIN_SEC, inDep);
+        if (inShunted && lastTrackId !== undefined && cross > prevEnd && cross < inDep) {
+          legs.push(
+            berthOn(
+              prevStation, lastTrackId, prevTrainId, prevTrainId,
+              pool.cars, prevRouting, prevEnd, cross,
+            ),
+          );
+          legs.push(
+            berthOn(
+              prevStation, inFirst.trackId, runs.in.id, prevTrainId,
+              pool.cars, prevRouting, cross, inDep,
+            ),
+          );
+        } else {
+          legs.push(
+            berthOn(
+              prevStation,
+              inShunted ? inFirst.trackId : lastTrackId,
+              inShunted ? runs.in.id : prevTrainId,
+              prevTrainId,
+              pool.cars,
+              prevRouting,
+              prevEnd,
+              inDep,
+            ),
+          );
+        }
       }
       legs.push({ kind: 'train', trainId: runs.in.id });
 
@@ -644,6 +706,38 @@ export function buildOimachiProject(): ProjectDocument {
     }
   }
 
+  // -- 4c. 乗務員行路 -------------------------------------------------------
+  // A second covering of exactly the same trains, by people rather than by
+  // stock. 大井町線 has been ワンマン運転 since 2020, so every type wants a
+  // 運転士 and nothing wants a 車掌; the 車掌 path exists in the model and in
+  // the editor, and is exercised by the toy project rather than here, because
+  // authoring conductors this line does not have would be the one place the
+  // sample contradicts the railway.
+  const crewReport = buildCrewDuties({
+    stationById: facts.stationById,
+    trains: allTrains,
+    allTrains,
+    cfg: { ...base.validationConfig },
+    dayTypeId: facts.dayTypeId,
+    role: 'driver',
+    nextId: () => nextCrewDutyId<'CrewDuty'>(),
+    codePrefix: '運',
+  });
+  const crewDuties = crewReport.duties;
+  const crew: Crew[] = crewDuties.map((duty, i) => ({
+    id: nextCrewId<'Crew'>(),
+    code: `D${String(i + 1).padStart(3, '0')}`,
+    name: `運転士${i + 1}`,
+    role: 'driver',
+    baseStationId: duty.baseStationId,
+  }));
+  const crewAssignments: CrewAssignment[] = crewDuties.map((duty, i) => ({
+    id: nextCrewAssignmentId<'CrewAssignment'>(),
+    date: activeDate,
+    crewDutyId: duty.id,
+    crewId: crew[i]!.id,
+  }));
+
   // -- 5. formations --------------------------------------------------------
   const { formations, assignments } = buildFleet(
     dutySpans,
@@ -678,6 +772,12 @@ export function buildOimachiProject(): ProjectDocument {
     maxDepotShiftSec,
     depotPeakStabled: capacity.peakStabled,
     depotCapacityExceeded: capacity.exceeded,
+    crewDuties: crewDuties.length,
+    crewWorkLimitCuts: crewReport.workLimitCuts,
+    crewBreakCuts: crewReport.breakCuts,
+    crewBreakLegs: crewReport.breakLegs,
+    crewDeadheadLegs: crewReport.deadheadLegs,
+    crewWorkHours: Math.round(crewReport.totalWorkSec / 3600),
     perBand: plan.bands.map((band) => {
       const inBand = serviceTrains.filter((t) => t.origin?.bandId === band.id);
       const down = inBand.filter((t) => t.direction === 'down').length;
@@ -727,6 +827,9 @@ export function buildOimachiProject(): ProjectDocument {
     inspectionRecords: entitiesFrom(inspectionRecords),
     calendar: [{ date: activeDate, dayTypeId: facts.dayTypeId }],
     assignments: entitiesFrom(assignments),
+    crew: entitiesFrom(crew),
+    crewDuties: entitiesFrom(crewDuties),
+    crewAssignments: entitiesFrom(crewAssignments),
   };
 }
 

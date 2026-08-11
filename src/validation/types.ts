@@ -7,6 +7,8 @@
  */
 
 import type {
+  CrewDutyId,
+  CrewId,
   DepotId,
   DutyId,
   FormationId,
@@ -30,7 +32,9 @@ export type EntityRef =
   | { kind: 'duty'; dutyId: DutyId; legIndex?: number }
   | { kind: 'formation'; formationId: FormationId }
   | { kind: 'depot'; depotId: DepotId }
-  | { kind: 'inspection'; formationId: FormationId; ruleId: InspectionRuleId };
+  | { kind: 'inspection'; formationId: FormationId; ruleId: InspectionRuleId }
+  | { kind: 'crewDuty'; crewDutyId: CrewDutyId; legIndex?: number }
+  | { kind: 'crew'; crewId: CrewId };
 
 export interface Issue {
   /**
@@ -74,7 +78,8 @@ export type RuleScope =
   | 'duties'
   | 'formations'
   | 'inspections'
-  | 'calendar';
+  | 'calendar'
+  | 'crew';
 
 export interface ValidationContext {
   doc: ProjectDocument;
@@ -115,6 +120,7 @@ export type RuleId =
   | 'track.noPlatform'
   | 'track.lengthExceeded'
   | 'track.crossingConflict'
+  | 'track.routeMissing'
   // turnbacks
   | 'turnback.insufficient'
   | 'turnback.tight'
@@ -144,7 +150,18 @@ export type RuleId =
   | 'inspection.overdue'
   | 'inspection.dueSoon'
   | 'inspection.depotNotCapable'
-  | 'inspection.conflictsWithDuty';
+  | 'inspection.conflictsWithDuty'
+  // 乗務員
+  | 'crew.continuityBreak'
+  | 'crew.reliefPointInvalid'
+  | 'crew.handoverTight'
+  | 'crew.continuousWorkExceeded'
+  | 'crew.breakInsufficient'
+  | 'crew.workTimeExceeded'
+  | 'crew.doubleBooked'
+  | 'crew.roleMismatch'
+  | 'crew.trainNotCovered'
+  | 'crew.notAtBase';
 
 export const RULE_GROUP_LABEL: Record<string, string> = {
   ref: '参照整合性',
@@ -159,6 +176,7 @@ export const RULE_GROUP_LABEL: Record<string, string> = {
   depot: '車庫',
   formation: '編成',
   inspection: '検査',
+  crew: '乗務員',
 };
 
 export interface RunValidationOptions {

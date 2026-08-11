@@ -75,6 +75,7 @@ import type {
   LinkRunTime,
   PerfProfile,
   Station,
+  StationCrossover,
   StationTrack,
   StopKind,
   StopPattern,
@@ -198,6 +199,30 @@ interface TrackSpec {
   wiring?: TrackWiring;
 }
 
+/**
+ * 溝の口's 大井町線 lead — the rails 2・3番線 and the two 引上線 share beyond the
+ * platform ends, and where the 大井町線 stops. Named rather than a direction
+ * because it is not a running line: nothing continues to 梶が谷 along it.
+ */
+const OM_LEAD = '大井町線';
+
+/**
+ * The single lead every road in a yard fans off, and the neck that joins it to
+ * the running line.
+ *
+ * A yard is one ladder off one lead, not ten roads each switched onto the main
+ * line, and saying it that way is both truer and an order of magnitude less
+ * pointwork: 鷺沼車庫 goes from thirty turnouts to ten and a neck. The neck is
+ * a `StationCrossover` because that is exactly what one is here — a connection
+ * between two leads, out beyond every road turnout in the throat.
+ */
+const YARD_LEAD = '構内';
+
+const YARD_NECK: StationCrossover[] = [
+  { end: 'up', from: YARD_LEAD, to: 'down', name: '出入庫線' },
+  { end: 'up', from: YARD_LEAD, to: 'up', name: '出入庫線' },
+];
+
 /** 本線がそのまま入る番線 — the common case, spelled once. */
 function line(...directions: Direction[]): TrackWiring {
   return { ends: ['down', 'up'], line: directions };
@@ -260,9 +285,15 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
       // lateral position are *authored* is the whole point of `TrackWiring` —
       // the km heuristic would hang it off the 大井町 end, and it sits beyond
       // the up platform, so every shunt in or out of it crosses the 上り本線.
+      //
+      // It is switched onto the 下り線 and nothing else. At a 相対式 station the
+      // platform road IS the running line, so that one line of wiring is what
+      // makes the 片渡り線 beyond it (see the station's `crossovers`) load
+      // bearing rather than decorative: stock at 2番線 is on the 上り線 and
+      // cannot reach the tail track without crossing over to the 下り線 first.
       return [
-        omPlatform('1番線', 1, ['down']),
-        omPlatform('2番線', 2, ['up']),
+        omPlatform('1番線', 1, ['down'], { wiring: line('down') }),
+        omPlatform('2番線', 2, ['up'], { wiring: line('up') }),
         {
           name: '引上線',
           usage: 'stabling',
@@ -273,7 +304,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 7,
           ...YARD,
           role: 'stabling',
-          wiring: { ends: ['down'], ladder: 2 },
+          wiring: { ends: ['down'], ladder: 2, connects: { down: ['down'] } },
         },
       ];
     case 'hatanodai':
@@ -397,6 +428,15 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
       // exactly the fact the 交差支障 check exists to surface. Both hang off the
       // 下り方 (梶が谷) end; the km heuristic happens to agree here, and would
       // not at a station in the 大井町 half of the line.
+      //
+      // The 梶が谷 throat is also where the 大井町線 stops. 2・3番線 fan into a
+      // lead of their own beyond the platform ends — `OM_LEAD` — which carries
+      // the two 引上線 and nothing else; the rails that continue to 梶が谷 are
+      // the 田園都市線's. The 引上線 sit on that lead AND on both 田園都市線
+      // running lines, which is the only way in from 鷺沼: a 回送 off that line
+      // terminates in a tail track and shunts across to a face, and cannot go
+      // straight to one. Everything downstream — the 番線 generator's choice of
+      // road, `track.routeMissing`, the 構内配線図 — reads it from here.
       return [
         {
           name: '1番線',
@@ -413,11 +453,21 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
         },
         omPlatform('2番線', 2, ['down', 'up'], {
           canTurnBack: true,
-          wiring: { ends: ['down', 'up'], ladder: 1, line: ['down'] },
+          wiring: {
+            ends: ['down', 'up'],
+            ladder: 1,
+            line: ['down'],
+            connects: { down: [OM_LEAD] },
+          },
         }),
         omPlatform('3番線', 3, ['down', 'up'], {
           canTurnBack: true,
-          wiring: { ends: ['down', 'up'], ladder: 2, line: ['up'] },
+          wiring: {
+            ends: ['down', 'up'],
+            ladder: 2,
+            line: ['up'],
+            connects: { down: [OM_LEAD] },
+          },
         }),
         {
           name: '4番線',
@@ -442,7 +492,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 7,
           ...YARD,
           role: 'stabling',
-          wiring: { ends: ['down'], ladder: 1 },
+          wiring: { ends: ['down'], ladder: 1, connects: { down: [OM_LEAD, 'down', 'up'] } },
         },
         {
           name: '引上2号線',
@@ -454,7 +504,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
           maxCars: 7,
           ...YARD,
           role: 'stabling',
-          wiring: { ends: ['down'], ladder: 2 },
+          wiring: { ends: ['down'], ladder: 2, connects: { down: [OM_LEAD, 'down', 'up'] } },
         },
       ];
     case 'saginumaStation':
@@ -471,6 +521,11 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
         role: 'dt' as const,
       }));
     case 'depotYard':
+      // Every road off one lead, and the lead faces 鷺沼 — the `up` end, since
+      // the yard is a stub hung on the km axis *beyond* the station it serves.
+      // The km heuristic reads it the other way (the yard is in the far half of
+      // the line, so it guesses 下り方) and there is nothing out there at all,
+      // which is why the end is authored: a 出庫 has to be able to leave.
       return Array.from({ length: 10 }, (_, i) => ({
         name: `留置${i + 1}番線`,
         number: i + 1,
@@ -482,6 +537,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
         maxCars: 10,
         ...YARD,
         role: 'depot' as const,
+        wiring: { ends: ['up'], ladder: i, connects: { up: [YARD_LEAD] } },
       }));
     case 'works':
       return [1, 2].map((n) => ({
@@ -495,6 +551,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
         maxCars: 10,
         ...YARD,
         role: 'depot' as const,
+        wiring: { ends: ['up'], ladder: n - 1, connects: { up: [YARD_LEAD] } },
       }));
   }
 }
@@ -523,6 +580,12 @@ interface StationSpec {
   transfers?: string[];
   defaultDown?: string;
   defaultUp?: string;
+  /** 渡り線 out beyond the roads' own turnouts. See `StationCrossover`. */
+  crossovers?: StationCrossover[];
+  /** 乗務員交代可能駅. */
+  crewChange?: boolean;
+  /** 乗務員基地 — 出勤・退勤・休憩ができる場所. Implies `crewChange`. */
+  crewBase?: boolean;
 }
 
 const STATION_SPECS: readonly StationSpec[] = [
@@ -538,6 +601,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['JR京浜東北線', '東京臨海高速鉄道りんかい線'],
     defaultDown: '1番線',
     defaultUp: '2番線',
+    crewBase: true,
   },
   {
     key: 'shimoshimmei',
@@ -651,6 +715,14 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['東急東横線'],
     defaultDown: '1番線',
     defaultUp: '2番線',
+    // 交代はできるが基地ではない。ここで終わる行路は基地まで添乗して帰る。
+    crewChange: true,
+    // 片渡り線, 溝の口方 — beyond the 引上線's own points, which is the whole
+    // reason it is here. The tail track is switched onto the 下り線 only, so
+    // stock that arrived at 2番線 (= the 上り線) reaches it by running out past
+    // the tail track's turnout, crossing to the 下り線 and setting back in.
+    // Exactly one duty does that; see `buildHoldDuty`.
+    crossovers: [{ end: 'down', from: 'up', to: 'down', name: '片渡り線' }],
   },
   {
     key: 'kuhombutsu',
@@ -754,6 +826,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['東急田園都市線', 'JR南武線(武蔵溝ノ口)'],
     defaultDown: '2番線',
     defaultUp: '3番線',
+    crewBase: true,
   },
   // --- 田園都市線 section: km posts are APPROXIMATE, measured on the 大井町
   //     axis rather than the real 渋谷 origin. See the file header.
@@ -792,6 +865,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['東急田園都市線'],
     defaultDown: '1番線',
     defaultUp: '4番線',
+    crewBase: true,
   },
   // --- synthetic depot nodes -------------------------------------------------
   {
@@ -804,6 +878,9 @@ const STATION_SPECS: readonly StationSpec[] = [
     minTurnbackSec: 300,
     layout: 'depotYard',
     kind: 'depot',
+    crossovers: YARD_NECK,
+    // 出庫回送に乗るのは車庫で乗り込む乗務員なので、ここも基地である。
+    crewBase: true,
   },
   {
     key: 'nagatsutaWorks',
@@ -817,6 +894,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     minTurnbackSec: 600,
     layout: 'works',
     kind: 'depot',
+    crossovers: YARD_NECK,
   },
 ];
 
@@ -1089,6 +1167,9 @@ export function buildFacts(): Facts {
       minTurnbackSec: spec.minTurnbackSec,
       defaultTrackId: { down: downTrack.id, up: upTrack.id },
       isConnectionPoint: spec.isConnectionPoint ?? false,
+      ...(spec.crossovers === undefined ? {} : { crossovers: spec.crossovers.map((c) => ({ ...c })) }),
+      ...(spec.crewChange === true ? { crewChange: true } : {}),
+      ...(spec.crewBase === true ? { crewBase: true } : {}),
       ...(spec.code === undefined ? {} : { code: spec.code }),
       ...(spec.transfers === undefined ? {} : { transfers: [...spec.transfers] }),
     };

@@ -12,7 +12,8 @@
 import { describe, expect, it } from 'vitest';
 import type { TrainId } from '@/domain/ids';
 import type { Link, LinkRunTime, ProjectDocument, StationTrack, Train } from '@/domain/model';
-import { computeStationWiring } from '@/domain/wiring';
+import { computeStationWiring, shuntMove } from '@/domain/wiring';
+import { crewDutySpread, crewLegEndpoints, crewWorkingSec } from '@/domain/project';
 import { entityList } from '@/domain/units';
 import { SEC_PER_DAY, intervalsOverlap } from '@/domain/time';
 import { runValidation } from '@/validation/run';
@@ -376,6 +377,64 @@ describe('自由が丘の引上線', () => {
     }
     expect([...users]).toEqual([]);
   });
+
+  it('is switched onto the 下り線 alone, and reached over the 片渡り線', () => {
+    const station = stationNamed('自由が丘');
+    expect(tail().wiring?.connects).toEqual({ down: ['down'] });
+    expect(station.crossovers).toEqual([
+      { end: 'down', from: 'up', to: 'down', name: '片渡り線' },
+    ]);
+
+    // The one duty that uses it arrives on the up platform — which at a 相対式
+    // station IS the 上り線 — so the shunt into the tail track has to work
+    // through the crossover, and the shunt back out does not.
+    const wiring = computeStationWiring(doc, station.id);
+    const duty = entityList(doc.duties).find((d) =>
+      d.legs.some((l) => l.kind === 'stable' && l.trackId === tail().id),
+    )!;
+    const legs = duty.legs.filter((l) => l.kind === 'train');
+    const out = doc.trains.byId[(legs[0] as { trainId: TrainId }).trainId]!;
+    const back = doc.trains.byId[(legs[1] as { trainId: TrainId }).trainId]!;
+    const arrived = out.stops[out.stops.length - 1]!.trackId!;
+    const left = back.stops[0]!.trackId!;
+    expect(shuntMove(wiring, arrived, tail().id)!.routing).toBe('crossover');
+    expect(shuntMove(wiring, tail().id, left)!.routing).toBe('direct');
+  });
+});
+
+describe('溝の口の鷺沼方', () => {
+  const mizonokuchi = () => stationNamed('溝の口');
+  const trackNamed = (name: string) =>
+    entityList(doc.stationTracks).find(
+      (t) => t.stationId === mizonokuchi().id && t.name === name,
+    )!;
+
+  it('puts the 大井町線 faces on a lead of their own beyond the platform ends', () => {
+    expect(trackNamed('2番線').wiring?.connects).toEqual({ down: ['大井町線'] });
+    expect(trackNamed('3番線').wiring?.connects).toEqual({ down: ['大井町線'] });
+    expect(trackNamed('引上1号線').wiring?.connects).toEqual({
+      down: ['大井町線', 'down', 'up'],
+    });
+  });
+
+  it('terminates every 鷺沼-side 回送 in a 引上線, never on a face', () => {
+    const km = mizonokuchi().kmFromOrigin;
+    const beyond = (stationId: string): boolean =>
+      (doc.stations.byId[stationId]?.kmFromOrigin ?? 0) > km;
+    const faces = new Set([trackNamed('2番線').id, trackNamed('3番線').id]);
+    const offending: string[] = [];
+    for (const train of trains) {
+      train.stops.forEach((stop, i) => {
+        if (stop.stationId !== mizonokuchi().id) return;
+        const touchesSaginumaSide =
+          (train.stops[i - 1] !== undefined && beyond(train.stops[i - 1]!.stationId)) ||
+          (train.stops[i + 1] !== undefined && beyond(train.stops[i + 1]!.stationId));
+        if (!touchesSaginumaSide) return;
+        if (stop.trackId !== undefined && faces.has(stop.trackId)) offending.push(train.number);
+      });
+    }
+    expect(offending).toEqual([]);
+  });
 });
 
 describe('運用と編成', () => {
@@ -657,6 +716,97 @@ describe('決定性とダイジェスト', () => {
   });
 });
 
+describe('乗務員運用', () => {
+  const crewDuties = entityList(doc.crewDuties);
+
+  it('covers every train exactly once with a 運転士', () => {
+    const counted = new Map<string, number>();
+    for (const duty of crewDuties) {
+      for (const leg of duty.legs) {
+        if (leg.kind !== 'train') continue;
+        counted.set(leg.trainId, (counted.get(leg.trainId) ?? 0) + 1);
+      }
+    }
+    const uncovered = trains.filter((t) => !counted.has(t.id)).map((t) => t.number);
+    expect(uncovered).toEqual([]);
+    const doubled = [...counted].filter(([, n]) => n > 1);
+    expect(doubled).toEqual([]);
+    // Every 乗務 leg is the whole train: the generator never splits one, even
+    // though the model and the editor both allow it.
+    for (const duty of crewDuties) {
+      for (const leg of duty.legs) {
+        if (leg.kind !== 'train') continue;
+        expect(leg.fromIndex).toBe(0);
+        expect(leg.toIndex).toBe(doc.trains.byId[leg.trainId]!.stops.length - 1);
+      }
+    }
+  });
+
+  it('starts and finishes every 行路 at a 乗務員基地', () => {
+    for (const duty of crewDuties) {
+      const first = crewLegEndpoints(doc, duty.legs[0]!)!;
+      const last = crewLegEndpoints(doc, duty.legs[duty.legs.length - 1]!)!;
+      expect(doc.stations.byId[first.fromStationId]!.crewBase).toBe(true);
+      expect(doc.stations.byId[last.toStationId]!.crewBase).toBe(true);
+      expect(doc.stations.byId[duty.baseStationId]!.crewBase).toBe(true);
+    }
+  });
+
+  it('keeps every 行路 inside the working limits', () => {
+    const cfg = doc.validationConfig;
+    for (const duty of crewDuties) {
+      expect(crewWorkingSec(doc, duty)).toBeLessThanOrEqual(cfg.crewMaxWorkSec);
+      expect(crewDutySpread(doc, duty)!.sec).toBeLessThanOrEqual(cfg.crewMaxSpreadSec);
+    }
+  });
+
+  it('takes every 休憩 at a base and for long enough to be one', () => {
+    let breaks = 0;
+    for (const duty of crewDuties) {
+      for (const leg of duty.legs) {
+        if (leg.kind !== 'break') continue;
+        breaks++;
+        expect(doc.stations.byId[leg.stationId]!.crewBase).toBe(true);
+        expect(leg.to - leg.from).toBeGreaterThanOrEqual(doc.validationConfig.crewMinBreakSec);
+      }
+    }
+    expect(breaks).toBeGreaterThan(10);
+  });
+
+  it('rides 添乗 home from 自由が丘, which is the only 交代可能駅 that is not a base', () => {
+    const deadheadLegs = crewDuties.flatMap((d) => d.legs.filter((l) => l.kind === 'deadhead'));
+    // Non-zero is the point: it proves the "bring both ends home" pass ran.
+    expect(deadheadLegs.length).toBeGreaterThan(0);
+    expect(report.crewDeadheadLegs).toBe(deadheadLegs.length);
+    const jiyugaoka = stationNamed('自由が丘');
+    expect(jiyugaoka.crewChange).toBe(true);
+    expect(jiyugaoka.crewBase).toBeUndefined();
+  });
+
+  it('gives every 行路 one person, and nobody two', () => {
+    const assignments = entityList(doc.crewAssignments);
+    expect(assignments).toHaveLength(crewDuties.length);
+    expect(new Set(assignments.map((a) => a.crewId)).size).toBe(assignments.length);
+    for (const a of assignments) {
+      expect(doc.crew.byId[a.crewId]!.role).toBe(doc.crewDuties.byId[a.crewDutyId]!.role);
+    }
+  });
+
+  it('needs more people than formations, which is the whole point', () => {
+    // 35 運用 against ~70 行路. Vehicles do not take breaks and do not go home
+    // in the middle of the day; the ratio is the cost of the ones that do.
+    expect(crewDuties.length).toBeGreaterThan(entityList(doc.duties).length);
+    expect(crewDuties.length).toBeLessThan(100);
+  });
+
+  it('has no 車掌 行路, because the line is ワンマン運転', () => {
+    expect(crewDuties.every((d) => d.role === 'driver')).toBe(true);
+    for (const type of entityList(doc.trainTypes)) {
+      expect(type.crewRoles ?? ['driver']).toEqual(['driver']);
+    }
+  });
+});
+
 describe('検証', () => {
   it('produces no validation errors', () => {
     const result = runValidation(doc);
@@ -665,9 +815,16 @@ describe('検証', () => {
     expect(result.errorCount).toBe(0);
   });
 
+  it('produces no 乗務員 warnings either', () => {
+    // The seed already ships 26 warnings from 平面交差支障, so a sloppy crew
+    // generator could hide in the noise. This checks its own namespace.
+    const crew = runValidation(doc).issues.filter((i) => i.ruleId.startsWith('crew.'));
+    expect(crew.map((i) => `${i.severity} ${i.ruleId}: ${i.detail}`)).toEqual([]);
+  });
+
   it('is a complete document', () => {
     const d: ProjectDocument = doc;
-    expect(d.schemaVersion).toBe(1);
+    expect(d.schemaVersion).toBe(2);
     expect(d.calendar).toHaveLength(1);
     expect(d.calendar[0]!.date).toBe(d.settings.activeDate);
     expect(d.settings.timeGrainSec).toBe(5);

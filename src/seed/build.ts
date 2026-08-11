@@ -36,6 +36,12 @@ function main(): void {
   lines.push(`検査履歴            ${digest.inspectionRecords}`);
   lines.push(`総走行キロ          ${digest.totalKm} km`);
   lines.push(`同時運用最大        ${digest.peakConcurrentDuties}`);
+  lines.push(
+    `乗務員行路          ${digest.crewDuties} (${JSON.stringify(digest.crewDutiesByRole)})`,
+  );
+  lines.push(`  実乗務 計         ${digest.crewWorkHours}時間`);
+  lines.push(`  行の内訳          ${JSON.stringify(digest.crewLegsByKind)}`);
+  lines.push(`同時乗務最大        ${digest.peakConcurrentCrewDuties}`);
 
   if (report !== undefined) {
     lines.push('');

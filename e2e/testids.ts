@@ -72,6 +72,18 @@ export const TID = {
   wiringEnd: (trackId: string, end: string) => `wiring-end-${trackId}-${end}`,
   wiringLadder: (trackId: string) => `wiring-ladder-${trackId}`,
   wiringLine: (trackId: string, direction: string) => `wiring-line-${trackId}-${direction}`,
+  wiringConnects: (trackId: string, end: string) => `wiring-connects-${trackId}-${end}`,
+
+  // 構内配線図 — the drawn, draggable version of the same facts --------------
+  wiringDiagram: 'wiring-diagram',
+  wiringRoad: (trackId: string) => `wiring-road-${trackId}`,
+  wiringTurnout: (trackId: string, end: string, lead: string) =>
+    `wiring-turnout-${trackId}-${end}-${lead}`,
+  wiringCrossoverMark: 'wiring-crossover-mark',
+  wiringRoute: 'wiring-route',
+  wiringCrossoverList: 'wiring-crossover-list',
+  wiringCrossoverAdd: (end: string) => `wiring-crossover-add-${end}`,
+  wiringCrossoverRemove: (index: number) => `wiring-crossover-remove-${index}`,
 
   // links ------------------------------------------------------------------
   linkList: 'link-list',
@@ -189,6 +201,51 @@ export const TID = {
   yardZoomReset: 'yard-zoom-reset',
   yardWindow: 'yard-window',
   yardShuntHint: 'yard-shunt-hint',
+
+  // 乗務員 ------------------------------------------------------------------
+  stationCrewChange: (stationId: string) => `station-crew-change-${stationId}`,
+  stationCrewBase: (stationId: string) => `station-crew-base-${stationId}`,
+  typeCrewRole: (trainTypeId: string, role: string) => `type-crew-role-${trainTypeId}-${role}`,
+  crewBoard: 'crew-board',
+  crewCodeInput: 'crew-code-input',
+  crewDutyAdd: 'crew-duty-add',
+  crewAutoAssign: 'crew-auto-assign',
+  crewAssignAutoFill: 'crew-assign-auto-fill',
+  crewRoleFilter: 'crew-role-filter',
+  crewDutyRow: (crewDutyId: string) => `crew-duty-row-${crewDutyId}`,
+  crewDutyExpand: (crewDutyId: string) => `crew-duty-expand-${crewDutyId}`,
+  crewDutyRemove: (crewDutyId: string) => `crew-duty-remove-${crewDutyId}`,
+  crewDutyRole: (crewDutyId: string) => `crew-duty-role-${crewDutyId}`,
+  crewDutyBase: (crewDutyId: string) => `crew-duty-base-${crewDutyId}`,
+  crewDutyPersonSelect: (crewDutyId: string) => `crew-duty-person-${crewDutyId}`,
+  crewDutyDayType: (crewDutyId: string, dayTypeId: string) =>
+    `crew-duty-day-type-${crewDutyId}-${dayTypeId}`,
+  crewLegList: (crewDutyId: string) => `crew-leg-list-${crewDutyId}`,
+  crewLegRow: (crewDutyId: string, legIndex: number) => `crew-leg-${crewDutyId}-${legIndex}`,
+  crewLegUp: (crewDutyId: string, legIndex: number) => `crew-leg-up-${crewDutyId}-${legIndex}`,
+  crewLegDown: (crewDutyId: string, legIndex: number) => `crew-leg-down-${crewDutyId}-${legIndex}`,
+  crewLegRemove: (crewDutyId: string, legIndex: number) =>
+    `crew-leg-remove-${crewDutyId}-${legIndex}`,
+  crewAddBreakLeg: (crewDutyId: string) => `crew-add-break-leg-${crewDutyId}`,
+  crewAddStandbyLeg: (crewDutyId: string) => `crew-add-standby-leg-${crewDutyId}`,
+  crewList: 'crew-list',
+  crewAdd: 'crew-add',
+  crewRow: (crewId: string) => `crew-row-${crewId}`,
+  crewRemove: (crewId: string) => `crew-remove-${crewId}`,
+  uncrewedTrains: 'uncrewed-trains',
+  uncrewedTrain: (trainId: string) => `uncrewed-train-${trainId}`,
+  addTrainToCrewDuty: (trainId: string) => `add-train-to-crew-duty-${trainId}`,
+  addTrainToCrewDutyChoice: (crewDutyId: string) => `add-train-to-crew-duty-choice-${crewDutyId}`,
+
+  // 行路表 (crew duty chart) -------------------------------------------------
+  crewChart: 'crew-chart',
+  crewChartRow: (crewDutyId: string) => `crew-chart-row-${crewDutyId}`,
+  crewChartBar: (crewDutyId: string, legIndex: number) =>
+    `crew-chart-bar-${crewDutyId}-${legIndex}`,
+  crewChartWindow: 'crew-chart-window',
+  crewZoomIn: 'crew-zoom-in',
+  crewZoomOut: 'crew-zoom-out',
+  crewZoomReset: 'crew-zoom-reset',
 
   // inspector --------------------------------------------------------------
   inspector: 'inspector',
@@ -343,6 +400,7 @@ export const ROUTES = {
   duties: 'duties',
   formations: 'formations',
   stations: 'stations',
+  crew: 'crew',
   types: 'types',
   inspections: 'inspections',
   settings: 'settings',

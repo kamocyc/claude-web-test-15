@@ -3,9 +3,12 @@ import { TID } from '@e2e/testids';
 
 import type { DutyId } from '@/domain/ids';
 import type { ProjectDocument } from '@/domain/model';
-import { formatTime } from '@/domain/time';
+import { CREW_ROLE_LABEL } from '@/domain/model';
+import { formatDuration, formatTime } from '@/domain/time';
 import { entityList, formatKm, getEntity } from '@/domain/units';
 import {
+  crewDutySpread,
+  crewWorkingSec,
   dutyDistance,
   dutyOfTrainMap,
   dutySpan,
@@ -108,6 +111,33 @@ export function Inspector() {
           ['走行距離', formatKm(dutyDistance(doc, duty))],
           ['必要両数', duty.requiredCars === undefined ? '—' : `${duty.requiredCars}両`],
           ['充当編成', formationCodeOfDuty(doc, duty.id) ?? '—'],
+        ];
+      }
+      case 'crewDuty': {
+        const duty = getEntity(doc.crewDuties, ref.crewDutyId);
+        if (duty === undefined) return [['乗務員行路', '(削除済み)']];
+        const spread = crewDutySpread(doc, duty);
+        const breakSec = duty.legs.reduce(
+          (sum, leg) => (leg.kind === 'break' ? sum + (leg.to - leg.from) : sum),
+          0,
+        );
+        return [
+          ['行路', duty.code],
+          ['職種', CREW_ROLE_LABEL[duty.role]],
+          ['基地', getEntity(doc.stations, duty.baseStationId)?.name ?? '—'],
+          ['行数', String(duty.legs.length)],
+          ['拘束', spread === undefined ? '—' : `${formatTime(spread.from)}–${formatTime(spread.to)}`],
+          ['実乗務', formatDuration(crewWorkingSec(doc, duty))],
+          ['休憩', breakSec === 0 ? '—' : formatDuration(breakSec)],
+        ];
+      }
+      case 'crew': {
+        const person = getEntity(doc.crew, ref.crewId);
+        if (person === undefined) return [['乗務員', '(削除済み)']];
+        return [
+          ['乗務員', `${person.code} ${person.name}`],
+          ['職種', CREW_ROLE_LABEL[person.role]],
+          ['所属', getEntity(doc.stations, person.baseStationId)?.name ?? '—'],
         ];
       }
       case 'formation': {
@@ -287,6 +317,8 @@ function titleOf(kind: string): string {
     stationTrack: '番線',
     link: '駅間',
     duty: '運用',
+    crewDuty: '乗務員行路',
+    crew: '乗務員',
     formation: '編成',
     depot: '車庫',
     inspection: '検査',

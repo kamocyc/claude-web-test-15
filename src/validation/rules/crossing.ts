@@ -154,6 +154,63 @@ function collectMoves(ctx: ValidationContext): Map<string, TimedMove[]> {
   return out;
 }
 
+/**
+ * 進路がない — a move the wiring does not join up.
+ *
+ * The companion to 平面交差支障, and the stricter of the two: that one says two
+ * moves cannot be made *at once*, this one says one of them cannot be made at
+ * all. A 回送 booked into 溝の口 2番線 off the 鷺沼 line is the case it exists
+ * for — the 大井町線 ends at the platform ends and the rails beyond belong to
+ * the 田園都市線, so the stock has to terminate in a 引上線 and shunt across.
+ *
+ * One issue per booked move rather than one per wiring fault, because a plan
+ * with the same impossible move at 06:00 and at 22:00 has two things to fix and
+ * the times are how you find them.
+ */
+export const trackRouteMissing: Rule = {
+  id: 'track.routeMissing',
+  name: '進路なし',
+  defaultSeverity: 'error',
+  scope: ['tracks'],
+  run(ctx) {
+    const out: Issue[] = [];
+    for (const [key, moves] of collectMoves(ctx)) {
+      const end = key.slice(key.indexOf('|') + 1) as StationEnd;
+      for (const move of moves) {
+        if (move.routing !== 'none') continue;
+        const how =
+          move.kind === 'shunt'
+            ? `${trackName(ctx.doc, move.fromTrackId)} と ${trackName(ctx.doc, move.trackId)} は${STATION_END_LABEL[end]}でつながっていません`
+            : `${trackName(ctx.doc, move.trackId)} は${STATION_END_LABEL[end]}で${move.lineDirection === 'down' ? '下り' : '上り'}本線とつながっていません`;
+        out.push({
+          id: issueId(
+            'track.routeMissing',
+            move.stationId,
+            end,
+            move.trainId,
+            move.kind,
+            move.at,
+          ),
+          ruleId: 'track.routeMissing',
+          severity: 'error',
+          title: '構内に進路がありません',
+          detail: `${stationName(ctx.doc, move.stationId)}: ${label(ctx, move)} (${hhmmss(move.at)}) — ${how}。`,
+          refs: [
+            { kind: 'station', stationId: move.stationId },
+            { kind: 'train', trainId: move.trainId },
+            ...(move.trackId === undefined
+              ? []
+              : [{ kind: 'stationTrack' as const, stationTrackId: move.trackId }]),
+          ],
+          at: move.at,
+          km: ctx.idx.kmOfStation.get(move.stationId) ?? 0,
+        });
+      }
+    }
+    return out;
+  },
+};
+
 export const trackCrossingConflict: Rule = {
   id: 'track.crossingConflict',
   name: '平面交差支障',

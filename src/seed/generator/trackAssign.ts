@@ -60,8 +60,9 @@
  */
 
 import type { StationId, StationTrackId, TrainId } from '@/domain/ids';
-import type { Direction, StationTrack, TrainStop } from '@/domain/model';
+import type { Direction, StationEnd, StationTrack, TrainStop } from '@/domain/model';
 import { intervalsOverlap } from '@/domain/time';
+import { canEnterFrom, defaultStubEnd, endTowards } from '@/domain/wiring';
 import type { Sec } from '@/domain/units';
 import { SeedError } from '../errors';
 import type { Facts, StationKey } from '../oimachi/facts';
@@ -672,6 +673,57 @@ function eventsOf(train: AssignableTrain, mustPass: ReadonlySet<string>): Event[
   return train.stops.map((_stop, stopIndex) => eventOf(train, stopIndex, mustPass));
 }
 
+/**
+ * Which end a stub hangs off at each station when the document does not say.
+ *
+ * Memoized per `Facts` because `permitted` asks for it once per candidate road
+ * per event, and the answer depends only on the km axis.
+ */
+const stubEnds = new WeakMap<Facts, Map<StationId, StationEnd>>();
+
+function stubEndAt(facts: Facts, stationId: StationId): StationEnd {
+  let byStation = stubEnds.get(facts);
+  if (byStation === undefined) {
+    const kms = facts.stations.map((s) => s.kmFromOrigin);
+    const from = Math.min(...kms);
+    const to = Math.max(...kms);
+    byStation = new Map(
+      facts.stations.map((s) => [s.id, defaultStubEnd(s.kmFromOrigin, from, to)]),
+    );
+    stubEnds.set(facts, byStation);
+  }
+  return byStation.get(stationId) ?? 'down';
+}
+
+/**
+ * Can this train reach this road from the stations either side of the stop?
+ *
+ * The 構内配線 read exactly the way `track.routeMissing` reads it, and on
+ * purpose: a generator that books a road the validator then calls unreachable
+ * ships a plan that looks broken and is not. What it rules out is the move the
+ * layout has no rails for — a 回送 off the 鷺沼 line straight into 溝の口 2番線,
+ * which has to terminate in a 引上線 and shunt across instead.
+ */
+function reachable(
+  facts: Facts,
+  stationId: StationId,
+  track: StationTrack,
+  train: AssignableTrain,
+  stopIndex: number,
+): boolean {
+  const station = facts.stationById.get(stationId);
+  if (station === undefined) return true;
+  const fallback = stubEndAt(facts, stationId);
+  for (const neighbour of [train.stops[stopIndex - 1], train.stops[stopIndex + 1]]) {
+    if (neighbour === undefined) continue;
+    const other = facts.stationById.get(neighbour.stationId);
+    if (other === undefined) continue;
+    const end = endTowards(station, other.kmFromOrigin);
+    if (!canEnterFrom(station, track, end, train.direction, fallback)) return false;
+  }
+  return true;
+}
+
 /** Is this road usable by every stop the event has to place on it? */
 function permitted(
   facts: Facts,
@@ -688,6 +740,7 @@ function permitted(
     const isTerminus = stopIndex === train.stops.length - 1;
     if (!track.directions.includes(train.direction)) return false;
     if (track.maxCars < train.cars) return false;
+    if (!reachable(facts, stationId, track, train, stopIndex)) return false;
 
     if (stationKey !== undefined && QUAD_SECTION.includes(stationKey)) {
       const stablingOk =

@@ -110,3 +110,41 @@ describe('track.crossingConflict', () => {
     expect(issues[0]!.detail).toContain('3番線');
   });
 });
+
+describe('track.routeMissing', () => {
+  it('does not fire on the clean fixture', () => {
+    expect(issuesFor(toyProject(), 'track.routeMissing')).toEqual([]);
+  });
+
+  it('fires when a road meets no 本線 at the end the train uses', () => {
+    // C駅's 待避線 is switched onto the 上り方 throat but onto a lead of its
+    // own there, the way 溝の口's 大井町線 faces are: reachable from the other
+    // roads, and from no running line.
+    const doc = toyProjectCopy();
+    doc.stationTracks.byId[TOY.c2]!.wiring = {
+      ends: ['down', 'up'],
+      connects: { up: ['側線'] },
+    };
+    doc.trains.byId[TOY.expressDown]!.stops[2]!.trackId = TOY.c2;
+    const issues = issuesFor(doc, 'track.routeMissing');
+    expect(issues.length).toBeGreaterThan(0);
+    expect(issues[0]!.severity).toBe('error');
+    expect(issues[0]!.detail).toContain('C駅');
+    expect(issues[0]!.detail).toContain('上り方');
+    expect(issues[0]!.detail).toContain('つながっていません');
+  });
+
+  it('stays quiet once a 渡り線 joins that lead to the line', () => {
+    const doc = toyProjectCopy();
+    doc.stationTracks.byId[TOY.c2]!.wiring = {
+      ends: ['down', 'up'],
+      connects: { up: ['側線'] },
+    };
+    doc.trains.byId[TOY.expressDown]!.stops[2]!.trackId = TOY.c2;
+    doc.stations.byId[TOY.stationC]!.crossovers = [
+      { end: 'up', from: '側線', to: 'down' },
+      { end: 'up', from: '側線', to: 'up' },
+    ];
+    expect(issuesFor(doc, 'track.routeMissing')).toEqual([]);
+  });
+});

@@ -11,7 +11,19 @@ import {
   connectionDiscovered,
   connectionQualityGap,
 } from './rules/connection';
-import { trackCrossingConflict } from './rules/crossing';
+import {
+  crewBreakInsufficient,
+  crewContinuityBreak,
+  crewContinuousWorkExceeded,
+  crewDoubleBooked,
+  crewHandoverTight,
+  crewNotAtBase,
+  crewReliefPointInvalid,
+  crewRoleMismatch,
+  crewTrainNotCovered,
+  crewWorkTimeExceeded,
+} from './rules/crew';
+import { trackCrossingConflict, trackRouteMissing } from './rules/crossing';
 import { depotAccessTimeViolated, depotCapacityExceeded } from './rules/depot';
 import {
   dutyCarCountMismatch,
@@ -77,6 +89,7 @@ export const RULES: Record<RuleId, Rule> = {
   'track.noPlatform': trackNoPlatform,
   'track.lengthExceeded': trackLengthExceeded,
   'track.crossingConflict': trackCrossingConflict,
+  'track.routeMissing': trackRouteMissing,
 
   'turnback.insufficient': turnbackInsufficient,
   'turnback.tight': turnbackTight,
@@ -107,6 +120,17 @@ export const RULES: Record<RuleId, Rule> = {
   'inspection.dueSoon': inspectionDueSoon,
   'inspection.depotNotCapable': inspectionDepotNotCapable,
   'inspection.conflictsWithDuty': inspectionConflictsWithDuty,
+
+  'crew.continuityBreak': crewContinuityBreak,
+  'crew.reliefPointInvalid': crewReliefPointInvalid,
+  'crew.handoverTight': crewHandoverTight,
+  'crew.continuousWorkExceeded': crewContinuousWorkExceeded,
+  'crew.breakInsufficient': crewBreakInsufficient,
+  'crew.workTimeExceeded': crewWorkTimeExceeded,
+  'crew.doubleBooked': crewDoubleBooked,
+  'crew.roleMismatch': crewRoleMismatch,
+  'crew.trainNotCovered': crewTrainNotCovered,
+  'crew.notAtBase': crewNotAtBase,
 };
 
 /** Catalogue order — the order the problem panel lists rules in. */

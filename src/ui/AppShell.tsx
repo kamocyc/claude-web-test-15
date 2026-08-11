@@ -30,6 +30,7 @@ import { StatusBar } from './shell/StatusBar';
 import { TopBar } from './shell/TopBar';
 
 import { DiagramScreen } from './screens/DiagramScreen';
+import { CrewScreen } from './screens/CrewScreen';
 import { DutiesScreen } from './screens/DutiesScreen';
 import { FormationsScreen } from './screens/FormationsScreen';
 import { InspectionsScreen } from './screens/InspectionsScreen';
@@ -169,6 +170,8 @@ function Screen({ route }: { route: string }) {
       return <DiagramScreen />;
     case ROUTES.duties:
       return <DutiesScreen />;
+    case ROUTES.crew:
+      return <CrewScreen />;
     case ROUTES.formations:
       return <FormationsScreen />;
     case ROUTES.stations:

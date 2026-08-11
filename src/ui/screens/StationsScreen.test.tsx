@@ -155,6 +155,76 @@ describe('構内配線', () => {
     fireEvent.click(screen.getByTestId(TID.wiringLine(TOY.c2, 'down')));
     expect(doc().stationTracks.byId[TOY.c2]?.wiring?.line).toEqual(['down']);
   });
+
+  it('writes a 接続先 list, and keeps the other end on what it was showing', () => {
+    render(<StationsScreen />);
+    pickC();
+    // 2番線 is a 下り待避線, so what it meets in either throat is the 下り本線.
+    const cell = screen.getByTestId(TID.wiringConnects(TOY.c2, 'up')) as HTMLInputElement;
+    expect(cell.value).toBe('下り');
+    fireEvent.change(cell, { target: { value: '側線' } });
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring?.connects).toEqual({
+      up: ['側線'],
+      down: ['down'],
+    });
+  });
+
+  it('adds and removes a 渡り線', () => {
+    render(<StationsScreen />);
+    pickC();
+    fireEvent.click(screen.getByTestId(TID.wiringCrossoverAdd('down')));
+    expect(doc().stations.byId[TOY.stationC]?.crossovers).toEqual([
+      { end: 'down', from: 'up', to: 'down' },
+    ]);
+    fireEvent.click(screen.getByTestId(TID.wiringCrossoverRemove(0)));
+    expect(doc().stations.byId[TOY.stationC]).not.toHaveProperty('crossovers');
+  });
+});
+
+describe('構内配線図', () => {
+  beforeEach(reset);
+
+  const pickC = (): void => {
+    fireEvent.change(screen.getByTestId(TID.stationSelect), { target: { value: TOY.stationC } });
+  };
+
+  it('draws one line per road, at its 分岐位置', () => {
+    render(<StationsScreen />);
+    pickC();
+    expect(screen.getByTestId(TID.wiringDiagram)).toBeTruthy();
+    expect(screen.getByTestId(TID.wiringRoad(TOY.c1)).getAttribute('data-ladder')).toBe('0');
+    expect(screen.getByTestId(TID.wiringRoad(TOY.c2)).getAttribute('data-ladder')).toBe('1');
+  });
+
+  it('cuts a connection when its 分岐器 is clicked', () => {
+    render(<StationsScreen />);
+    pickC();
+    fireEvent.click(screen.getByTestId(TID.wiringTurnout(TOY.c2, 'up', 'down')));
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring?.connects?.up).toEqual([]);
+    // The turnout is gone with it — the picture is the model, not a copy.
+    expect(screen.queryByTestId(TID.wiringTurnout(TOY.c2, 'up', 'down'))).toBeNull();
+  });
+
+  it('shades the routes of the road that is picked, and only then', () => {
+    render(<StationsScreen />);
+    pickC();
+    expect(screen.queryAllByTestId(TID.wiringRoute)).toHaveLength(0);
+    fireEvent.pointerDown(screen.getByTestId(TID.wiringRoad(TOY.c2)));
+    expect(screen.queryAllByTestId(TID.wiringRoute).length).toBeGreaterThan(0);
+  });
+
+  it('moves a road across the throat when it is dragged', () => {
+    render(<StationsScreen />);
+    pickC();
+    const road = screen.getByTestId(TID.wiringRoad(TOY.c2));
+    const svg = screen.getByTestId(TID.wiringDiagram);
+    svg.getBoundingClientRect = () =>
+      ({ top: 0, left: 0, width: 720, height: 100, bottom: 100, right: 720, x: 0, y: 0 }) as DOMRect;
+    fireEvent.pointerDown(road);
+    fireEvent.pointerMove(svg, { clientY: 100 });
+    fireEvent.pointerUp(svg);
+    expect(doc().stationTracks.byId[TOY.c2]?.wiring?.ladder).toBeGreaterThan(1);
+  });
 });
 
 describe('駅の編集', () => {
