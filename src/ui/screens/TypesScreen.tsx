@@ -12,6 +12,7 @@ import { TID } from '@e2e/testids';
 import { ID_PREFIX } from '@/domain/ids';
 import type { PerfProfileId, StationId, TrainTypeId } from '@/domain/ids';
 import type { Direction, PerfProfile, StopKind, StopPattern, TrainType } from '@/domain/model';
+import { CREW_ROLE_LABEL, CREW_ROLES } from '@/domain/model';
 import { findDependants } from '@/domain/integrity';
 import { orderedStations } from '@/domain/project';
 import { entityList } from '@/domain/units';
@@ -120,6 +121,7 @@ export function TypesScreen() {
                 <th>略称</th>
                 <th>色</th>
                 <th>旅客</th>
+                <th>乗務</th>
                 <th>性能</th>
                 <th>順序</th>
                 <th />
@@ -190,6 +192,37 @@ export function TypesScreen() {
                         })
                       }
                     />
+                  </td>
+                  <td>
+                    {/* ワンマン運転かどうかがここで決まる。既定は運転士だけ。 */}
+                    <div className={styles.chipRow}>
+                      {CREW_ROLES.map((role) => {
+                        const roles = type.crewRoles ?? ['driver'];
+                        const on = roles.includes(role);
+                        return (
+                          <button
+                            key={role}
+                            type="button"
+                            data-testid={TID.typeCrewRole(type.id, role)}
+                            className={`${styles.chip} ${on ? styles.chipOn : styles.chipOff}`}
+                            aria-pressed={on}
+                            aria-label={`${type.name} に${CREW_ROLE_LABEL[role]}`}
+                            onClick={() => {
+                              const next = on
+                                ? roles.filter((r) => r !== role)
+                                : [...CREW_ROLES].filter((r) => roles.includes(r) || r === role);
+                              dispatch({
+                                type: 'trainType/update',
+                                id: type.id,
+                                patch: { crewRoles: next },
+                              });
+                            }}
+                          >
+                            {CREW_ROLE_LABEL[role]}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </td>
                   <td>
                     <select

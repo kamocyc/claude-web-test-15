@@ -37,6 +37,8 @@ import type {
   TrainTypeId,
 } from '@/domain/ids';
 import type {
+  Crew,
+  CrewDuty,
   Depot,
   Duty,
   Formation,
@@ -96,6 +98,13 @@ export const TOY = {
   depotIn: asId<'Train'>(`${ID_PREFIX.train}-4`),
   dutyLocal: asId<'Duty'>(`${ID_PREFIX.duty}-1`),
   dutyExpress: asId<'Duty'>(`${ID_PREFIX.duty}-2`),
+  // 乗務員: two drivers based at the depot, one 行路 each. The express driver
+  // 添乗s out and back on the other duty's 回送, which is what makes the pair
+  // start and finish at the base.
+  crewDutyLocal: asId<'CrewDuty'>(`${ID_PREFIX.crewDuty}-1`),
+  crewDutyExpress: asId<'CrewDuty'>(`${ID_PREFIX.crewDuty}-2`),
+  driver1: asId<'Crew'>(`${ID_PREFIX.crew}-1`),
+  driver2: asId<'Crew'>(`${ID_PREFIX.crew}-2`),
 } as const;
 
 const H = 3600;
@@ -223,7 +232,7 @@ export function toyProject(): ProjectDocument {
       defaultTrackId: { down: TOY.c1, up: TOY.c3 },
     }),
     station(TOY.stationD, 'D駅', 3.0, [TOY.d1, TOY.d2]),
-    station(TOY.stationDepot, 'A車庫', -0.5, [TOY.x1], { kind: 'depot' }),
+    station(TOY.stationDepot, 'A車庫', -0.5, [TOY.x1], { kind: 'depot', crewBase: true }),
   ];
 
   const links: Link[] = [
@@ -415,6 +424,42 @@ export function toyProject(): ProjectDocument {
     },
   ];
 
+  // -- 乗務員 ---------------------------------------------------------------
+  const crewDuties: CrewDuty[] = [
+    {
+      id: TOY.crewDutyLocal,
+      code: '11仕',
+      role: 'driver',
+      baseStationId: TOY.stationDepot,
+      dayTypeIds: [TOY.dayType],
+      legs: [
+        { kind: 'train', trainId: TOY.depotOut, fromIndex: 0, toIndex: 1 },
+        { kind: 'train', trainId: TOY.localDown, fromIndex: 0, toIndex: 3 },
+        { kind: 'standby', stationId: TOY.stationD, from: 8 * H + 10 * M + 30, to: 8 * H + 20 * M },
+        { kind: 'train', trainId: TOY.depotIn, fromIndex: 0, toIndex: 4 },
+      ],
+    },
+    {
+      id: TOY.crewDutyExpress,
+      code: '12仕',
+      role: 'driver',
+      baseStationId: TOY.stationDepot,
+      dayTypeIds: [TOY.dayType],
+      legs: [
+        { kind: 'deadhead', trainId: TOY.depotOut, fromIndex: 0, toIndex: 1 },
+        { kind: 'standby', stationId: TOY.stationA, from: 7 * H + 52 * M, to: 8 * H + 3 * M },
+        { kind: 'train', trainId: TOY.expressDown, fromIndex: 0, toIndex: 3 },
+        { kind: 'standby', stationId: TOY.stationD, from: 8 * H + 8 * M, to: 8 * H + 20 * M },
+        { kind: 'deadhead', trainId: TOY.depotIn, fromIndex: 0, toIndex: 4 },
+      ],
+    },
+  ];
+
+  const crew: Crew[] = [
+    { id: TOY.driver1, code: 'D01', name: '甲', role: 'driver', baseStationId: TOY.stationDepot },
+    { id: TOY.driver2, code: 'D02', name: '乙', role: 'driver', baseStationId: TOY.stationDepot },
+  ];
+
   const series: FormationSeries[] = [
     {
       id: TOY.series,
@@ -521,6 +566,12 @@ export function toyProject(): ProjectDocument {
       { id: asId<'Assignment'>('asg-2'), date: '2026-04-06', dutyId: TOY.dutyExpress, formationId: TOY.formation2 },
     ]),
     calendar: [{ date: '2026-04-06', dayTypeId: TOY.dayType }],
+    crew: entitiesFrom(crew),
+    crewDuties: entitiesFrom(crewDuties),
+    crewAssignments: entitiesFrom([
+      { id: asId<'CrewAssignment'>('cas-1'), date: '2026-04-06', crewDutyId: TOY.crewDutyLocal, crewId: TOY.driver1 },
+      { id: asId<'CrewAssignment'>('cas-2'), date: '2026-04-06', crewDutyId: TOY.crewDutyExpress, crewId: TOY.driver2 },
+    ]),
   };
 }
 

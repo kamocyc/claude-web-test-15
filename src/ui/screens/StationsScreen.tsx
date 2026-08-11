@@ -233,6 +233,8 @@ export function StationsScreen() {
                   <th>最小停車</th>
                   <th>最小折返</th>
                   <th>接続駅</th>
+                  <th>乗務員交代</th>
+                  <th>乗務員基地</th>
                   <th>番線</th>
                   <th />
                 </tr>
@@ -353,6 +355,41 @@ export function StationsScreen() {
                             type: 'station/update',
                             id: station.id,
                             patch: { isConnectionPoint: e.currentTarget.checked },
+                          })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        data-testid={TID.stationCrewChange(station.id)}
+                        checked={station.crewChange === true || station.crewBase === true}
+                        disabled={station.crewBase === true}
+                        aria-label={`${station.name} は乗務員交代可能駅`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'station/update',
+                            id: station.id,
+                            patch: e.currentTarget.checked
+                              ? { crewChange: true }
+                              : clearing<Station>('crewChange'),
+                          })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        data-testid={TID.stationCrewBase(station.id)}
+                        checked={station.crewBase === true}
+                        aria-label={`${station.name} は乗務員基地`}
+                        onChange={(e) =>
+                          dispatch({
+                            type: 'station/update',
+                            id: station.id,
+                            patch: e.currentTarget.checked
+                              ? { crewBase: true }
+                              : clearing<Station>('crewBase'),
                           })
                         }
                       />

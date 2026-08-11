@@ -30,7 +30,12 @@ function node(from: StationId, to: StationId, dep: number, arr: number, cars = 5
   };
 }
 
-const opts = { turnaroundSec: () => 300, maxLayoverSec: () => 3600 };
+const opts = {
+  turnaroundSec: () => 300,
+  maxLayoverSec: () => 3600,
+  compatible: (a: DutyNode, b: DutyNode) => b.cars === a.cars && b.routing === a.routing,
+  fifoKey: (n: DutyNode) => n.routing,
+};
 
 describe('minimumPathCover', () => {
   it('chains a there-and-back shuttle into a single duty', () => {

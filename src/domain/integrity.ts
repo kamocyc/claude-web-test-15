@@ -161,6 +161,34 @@ export function checkReferentialIntegrity(doc: ProjectDocument): DanglingRef[] {
     need(has(doc.formations, a.formationId), `assignments.${a.id}.formationId`, 'Formation', a.formationId);
   }
 
+  for (const person of entityList(doc.crew)) {
+    need(has(doc.stations, person.baseStationId), `crew.${person.id}.baseStationId`, 'Station', person.baseStationId);
+  }
+
+  for (const duty of entityList(doc.crewDuties)) {
+    need(
+      has(doc.stations, duty.baseStationId),
+      `crewDuties.${duty.id}.baseStationId`,
+      'Station',
+      duty.baseStationId,
+    );
+    for (const dt of duty.dayTypeIds) {
+      need(has(doc.dayTypes, dt), `crewDuties.${duty.id}.dayTypeIds`, 'DayType', dt);
+    }
+    for (const [i, leg] of duty.legs.entries()) {
+      if (leg.kind === 'break' || leg.kind === 'standby') {
+        need(has(doc.stations, leg.stationId), `crewDuties.${duty.id}.legs[${i}].stationId`, 'Station', leg.stationId);
+      } else {
+        need(has(doc.trains, leg.trainId), `crewDuties.${duty.id}.legs[${i}].trainId`, 'Train', leg.trainId);
+      }
+    }
+  }
+
+  for (const a of entityList(doc.crewAssignments)) {
+    need(has(doc.crewDuties, a.crewDutyId), `crewAssignments.${a.id}.crewDutyId`, 'CrewDuty', a.crewDutyId);
+    need(has(doc.crew, a.crewId), `crewAssignments.${a.id}.crewId`, 'Crew', a.crewId);
+  }
+
   for (const [i, c] of doc.calendar.entries()) {
     need(has(doc.dayTypes, c.dayTypeId), `calendar[${i}].dayTypeId`, 'DayType', c.dayTypeId);
   }
@@ -183,7 +211,9 @@ export type EntityKind =
   | 'formationSeries'
   | 'perfProfile'
   | 'inspectionRule'
-  | 'dayType';
+  | 'dayType'
+  | 'crew'
+  | 'crewDuty';
 
 export interface Dependant {
   kind: EntityKind;
@@ -248,6 +278,23 @@ export function findDependants(
       if (d.legs.some((l) => l.kind === 'train' && l.trainId === id)) {
         out.push({ kind: 'duty', id: d.id, label: `運用 ${d.code}` });
       }
+    }
+    for (const d of entityList(doc.crewDuties)) {
+      if (d.legs.some((l) => (l.kind === 'train' || l.kind === 'deadhead') && l.trainId === id)) {
+        out.push({ kind: 'crewDuty', id: d.id, label: `乗務員行路 ${d.code}` });
+      }
+    }
+  }
+
+  if (kind === 'crewDuty') {
+    for (const a of entityList(doc.crewAssignments)) {
+      if (a.crewDutyId === id) out.push({ kind: 'crewDuty', id: a.id, label: `乗務割当 ${a.date}` });
+    }
+  }
+
+  if (kind === 'crew') {
+    for (const a of entityList(doc.crewAssignments)) {
+      if (a.crewId === id) out.push({ kind: 'crewDuty', id: a.id, label: `乗務割当 ${a.date}` });
     }
   }
 

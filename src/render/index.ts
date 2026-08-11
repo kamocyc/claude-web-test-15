@@ -16,6 +16,20 @@ export { LineViewCanvas } from './lineView/LineViewCanvas';
 export { StringDiagramCanvas } from './stringDiagram/StringDiagramCanvas';
 export { StationYardChart } from './stationYard/StationYardChart';
 export { StationWiringDiagram } from './stationWiring/StationWiringDiagram';
+export { CrewDutyChart } from './crewDuty/CrewDutyChart';
+export { computeCrewChartLayout, rowAtY, CREW_LANE_H } from './crewDuty/layout';
+export type { CrewChartBar, CrewChartLayout, CrewChartRow } from './crewDuty/layout';
+export {
+  clampTimeWindow,
+  niceTimeTicks,
+  panTimeWindow,
+  timeScale,
+  zoomTimeWindow,
+  TIME_TICK_STEPS,
+  TIME_TICK_MIN_PX,
+  type TimeScale,
+  type TimeWindow,
+} from './timeAxis';
 export { computeWiringDiagram, routesOfRoad } from './stationWiring/layout';
 
 // State wiring -------------------------------------------------------------

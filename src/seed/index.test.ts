@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type { TrainId } from '@/domain/ids';
 import type { Link, LinkRunTime, ProjectDocument, StationTrack, Train } from '@/domain/model';
 import { computeStationWiring, shuntMove } from '@/domain/wiring';
+import { crewDutySpread, crewLegEndpoints, crewWorkingSec } from '@/domain/project';
 import { entityList } from '@/domain/units';
 import { SEC_PER_DAY, intervalsOverlap } from '@/domain/time';
 import { runValidation } from '@/validation/run';
@@ -715,6 +716,97 @@ describe('決定性とダイジェスト', () => {
   });
 });
 
+describe('乗務員運用', () => {
+  const crewDuties = entityList(doc.crewDuties);
+
+  it('covers every train exactly once with a 運転士', () => {
+    const counted = new Map<string, number>();
+    for (const duty of crewDuties) {
+      for (const leg of duty.legs) {
+        if (leg.kind !== 'train') continue;
+        counted.set(leg.trainId, (counted.get(leg.trainId) ?? 0) + 1);
+      }
+    }
+    const uncovered = trains.filter((t) => !counted.has(t.id)).map((t) => t.number);
+    expect(uncovered).toEqual([]);
+    const doubled = [...counted].filter(([, n]) => n > 1);
+    expect(doubled).toEqual([]);
+    // Every 乗務 leg is the whole train: the generator never splits one, even
+    // though the model and the editor both allow it.
+    for (const duty of crewDuties) {
+      for (const leg of duty.legs) {
+        if (leg.kind !== 'train') continue;
+        expect(leg.fromIndex).toBe(0);
+        expect(leg.toIndex).toBe(doc.trains.byId[leg.trainId]!.stops.length - 1);
+      }
+    }
+  });
+
+  it('starts and finishes every 行路 at a 乗務員基地', () => {
+    for (const duty of crewDuties) {
+      const first = crewLegEndpoints(doc, duty.legs[0]!)!;
+      const last = crewLegEndpoints(doc, duty.legs[duty.legs.length - 1]!)!;
+      expect(doc.stations.byId[first.fromStationId]!.crewBase).toBe(true);
+      expect(doc.stations.byId[last.toStationId]!.crewBase).toBe(true);
+      expect(doc.stations.byId[duty.baseStationId]!.crewBase).toBe(true);
+    }
+  });
+
+  it('keeps every 行路 inside the working limits', () => {
+    const cfg = doc.validationConfig;
+    for (const duty of crewDuties) {
+      expect(crewWorkingSec(doc, duty)).toBeLessThanOrEqual(cfg.crewMaxWorkSec);
+      expect(crewDutySpread(doc, duty)!.sec).toBeLessThanOrEqual(cfg.crewMaxSpreadSec);
+    }
+  });
+
+  it('takes every 休憩 at a base and for long enough to be one', () => {
+    let breaks = 0;
+    for (const duty of crewDuties) {
+      for (const leg of duty.legs) {
+        if (leg.kind !== 'break') continue;
+        breaks++;
+        expect(doc.stations.byId[leg.stationId]!.crewBase).toBe(true);
+        expect(leg.to - leg.from).toBeGreaterThanOrEqual(doc.validationConfig.crewMinBreakSec);
+      }
+    }
+    expect(breaks).toBeGreaterThan(10);
+  });
+
+  it('rides 添乗 home from 自由が丘, which is the only 交代可能駅 that is not a base', () => {
+    const deadheadLegs = crewDuties.flatMap((d) => d.legs.filter((l) => l.kind === 'deadhead'));
+    // Non-zero is the point: it proves the "bring both ends home" pass ran.
+    expect(deadheadLegs.length).toBeGreaterThan(0);
+    expect(report.crewDeadheadLegs).toBe(deadheadLegs.length);
+    const jiyugaoka = stationNamed('自由が丘');
+    expect(jiyugaoka.crewChange).toBe(true);
+    expect(jiyugaoka.crewBase).toBeUndefined();
+  });
+
+  it('gives every 行路 one person, and nobody two', () => {
+    const assignments = entityList(doc.crewAssignments);
+    expect(assignments).toHaveLength(crewDuties.length);
+    expect(new Set(assignments.map((a) => a.crewId)).size).toBe(assignments.length);
+    for (const a of assignments) {
+      expect(doc.crew.byId[a.crewId]!.role).toBe(doc.crewDuties.byId[a.crewDutyId]!.role);
+    }
+  });
+
+  it('needs more people than formations, which is the whole point', () => {
+    // 35 運用 against ~70 行路. Vehicles do not take breaks and do not go home
+    // in the middle of the day; the ratio is the cost of the ones that do.
+    expect(crewDuties.length).toBeGreaterThan(entityList(doc.duties).length);
+    expect(crewDuties.length).toBeLessThan(100);
+  });
+
+  it('has no 車掌 行路, because the line is ワンマン運転', () => {
+    expect(crewDuties.every((d) => d.role === 'driver')).toBe(true);
+    for (const type of entityList(doc.trainTypes)) {
+      expect(type.crewRoles ?? ['driver']).toEqual(['driver']);
+    }
+  });
+});
+
 describe('検証', () => {
   it('produces no validation errors', () => {
     const result = runValidation(doc);
@@ -723,9 +815,16 @@ describe('検証', () => {
     expect(result.errorCount).toBe(0);
   });
 
+  it('produces no 乗務員 warnings either', () => {
+    // The seed already ships 26 warnings from 平面交差支障, so a sloppy crew
+    // generator could hide in the noise. This checks its own namespace.
+    const crew = runValidation(doc).issues.filter((i) => i.ruleId.startsWith('crew.'));
+    expect(crew.map((i) => `${i.severity} ${i.ruleId}: ${i.detail}`)).toEqual([]);
+  });
+
   it('is a complete document', () => {
     const d: ProjectDocument = doc;
-    expect(d.schemaVersion).toBe(1);
+    expect(d.schemaVersion).toBe(2);
     expect(d.calendar).toHaveLength(1);
     expect(d.calendar[0]!.date).toBe(d.settings.activeDate);
     expect(d.settings.timeGrainSec).toBe(5);

@@ -25,6 +25,9 @@ export type InspectionRuleId = Id<'InspectionRule'>;
 export type InspectionRecordId = Id<'InspectionRecord'>;
 export type AssignmentId = Id<'Assignment'>;
 export type DayTypeId = Id<'DayType'>;
+export type CrewId = Id<'Crew'>;
+export type CrewDutyId = Id<'CrewDuty'>;
+export type CrewAssignmentId = Id<'CrewAssignment'>;
 
 /** Cast a raw string to a branded id. Use at parse/seed boundaries only. */
 export function asId<K extends string>(raw: string): Id<K> {
@@ -85,4 +88,7 @@ export const ID_PREFIX = {
   inspectionRecord: 'irc',
   assignment: 'asg',
   dayType: 'day',
+  crew: 'crw',
+  crewDuty: 'cdt',
+  crewAssignment: 'cas',
 } as const;

@@ -7,7 +7,8 @@
  * animation frame.
  */
 
-import type { StationId, StationTrackId, TrainId } from '@/domain/ids';
+import type { CrewDutyId, StationId, StationTrackId, TrainId } from '@/domain/ids';
+import type { CrewRole } from '@/domain/model';
 import type { Meters, Sec } from '@/domain/units';
 import type { EntityRef } from '@/validation/types';
 
@@ -39,6 +40,15 @@ export interface StringDiagramProps extends CanvasViewProps {
   direction?: 'both' | 'down' | 'up';
   /** Trains drawn thicker because they are selected elsewhere in the app. */
   selectedTrainIds?: readonly TrainId[];
+}
+
+export interface CrewDutyChartProps {
+  /** Absent = every role on one sheet. */
+  role?: CrewRole;
+  selectedCrewDutyId?: CrewDutyId;
+  /** A click on a row or a bar. `legIndex` is absent for the row itself. */
+  onSelect?: (crewDutyId: CrewDutyId, legIndex?: number) => void;
+  className?: string;
 }
 
 export interface StationYardProps {

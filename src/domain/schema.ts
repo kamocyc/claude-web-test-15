@@ -24,6 +24,7 @@ function entities<T extends z.ZodTypeAny>(item: T) {
 const direction = z.enum(['down', 'up']);
 const stationEnd = z.enum(['down', 'up']);
 const inspectionKind = z.enum(['train', 'monthly', 'bogie', 'general']);
+const crewRole = z.enum(['driver', 'conductor']);
 
 const lineSchema = z.object({
   id,
@@ -46,6 +47,8 @@ const stationSchema = z.object({
   minTurnbackSec: z.number().nonnegative(),
   defaultTrackId: z.object({ down: id.optional(), up: id.optional() }),
   isConnectionPoint: z.boolean(),
+  crewChange: z.boolean().optional(),
+  crewBase: z.boolean().optional(),
   transfers: z.array(z.string()).optional(),
   crossovers: z
     .array(
@@ -138,6 +141,7 @@ const trainTypeSchema = z.object({
   perfProfileId: id,
   defaultStopPatternId: id.optional(),
   sortOrder: z.number(),
+  crewRoles: z.array(crewRole).optional(),
 });
 
 const stopKind = z.enum(['stop', 'pass']);
@@ -268,6 +272,44 @@ const inspectionRecordSchema = z.object({
   note: z.string().optional(),
 });
 
+const crewLegSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('train'),
+    trainId: id,
+    fromIndex: z.number().int().nonnegative(),
+    toIndex: z.number().int().nonnegative(),
+  }),
+  z.object({
+    kind: z.literal('deadhead'),
+    trainId: id,
+    fromIndex: z.number().int().nonnegative(),
+    toIndex: z.number().int().nonnegative(),
+  }),
+  z.object({ kind: z.literal('break'), stationId: id, from: sec, to: sec }),
+  z.object({ kind: z.literal('standby'), stationId: id, from: sec, to: sec }),
+]);
+
+const crewDutySchema = z.object({
+  id,
+  code: z.string(),
+  role: crewRole,
+  baseStationId: id,
+  dayTypeIds: z.array(id),
+  legs: z.array(crewLegSchema),
+  color: z.string().optional(),
+});
+
+const crewSchema = z.object({
+  id,
+  code: z.string(),
+  name: z.string(),
+  role: crewRole,
+  baseStationId: id,
+  note: z.string().optional(),
+});
+
+const crewAssignmentSchema = z.object({ id, date: isoDate, crewDutyId: id, crewId: id });
+
 const dayTypeSchema = z.object({
   id,
   name: z.string(),
@@ -307,6 +349,14 @@ export const projectSchema = z.object({
     connectionMaxWaitSec: z.number().nonnegative(),
     overtakeClearanceSec: z.number().nonnegative(),
     inspectionWarnRatio: z.number().min(0).max(1),
+    crewMaxContinuousWorkSec: z.number().nonnegative(),
+    crewMinBreakSec: z.number().nonnegative(),
+    crewMinTotalBreakSec: z.number().nonnegative(),
+    crewMaxSpreadSec: z.number().nonnegative(),
+    crewMaxWorkSec: z.number().nonnegative(),
+    crewMinHandoverSec: z.number().nonnegative(),
+    crewSignOnSec: z.number().nonnegative(),
+    crewSignOffSec: z.number().nonnegative(),
   }),
   line: lineSchema,
   stations: entities(stationSchema),
@@ -326,6 +376,9 @@ export const projectSchema = z.object({
   dayTypes: entities(dayTypeSchema),
   calendar: z.array(z.object({ date: isoDate, dayTypeId: id })),
   assignments: entities(assignmentSchema),
+  crew: entities(crewSchema),
+  crewDuties: entities(crewDutySchema),
+  crewAssignments: entities(crewAssignmentSchema),
 });
 
 export interface ParseResult {

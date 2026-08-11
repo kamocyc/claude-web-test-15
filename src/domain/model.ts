@@ -18,6 +18,9 @@
 
 import type {
   AssignmentId,
+  CrewAssignmentId,
+  CrewDutyId,
+  CrewId,
   DayTypeId,
   DepotId,
   DutyId,
@@ -36,7 +39,7 @@ import type {
 } from './ids';
 import type { Entities, IsoDate, Meters, Sec } from './units';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** `down` = increasing km. For the Oimachi Line that is 大井町 → 溝の口. */
 export type Direction = 'down' | 'up';
@@ -83,6 +86,18 @@ export interface Station {
   isConnectionPoint: boolean;
   /** 渡り線 in either throat. Absent = none; see `StationCrossover`. */
   crossovers?: StationCrossover[];
+  /**
+   * 乗務員交代可能駅. A crew may board or leave a train here. Absent = false:
+   * a place with no relief arrangement is the common case, and a crew that
+   * could change anywhere would make the check vacuous.
+   */
+  crewChange?: boolean;
+  /**
+   * 乗務員基地 — where a duty signs on and off and where a 休憩 can be taken.
+   * A base is a relief point by construction; `crewChange` need not be
+   * repeated. Absent = false.
+   */
+  crewBase?: boolean;
   /** Display only — '東急目黒線', 'JR京浜東北線'. */
   transfers?: string[];
 }
@@ -298,6 +313,14 @@ export interface TrainType {
   perfProfileId: PerfProfileId;
   defaultStopPatternId?: StopPatternId;
   sortOrder: number;
+  /**
+   * Which crew this type of train needs. Absent = `['driver']`, i.e. ワンマン
+   * 運転, because that is what the bundled line does and because a driver is
+   * the one member no train can run without. Add `'conductor'` to make the
+   * type ツーマン — the checks and the auto-composer then want a 車掌行路 for
+   * every train of that type as well.
+   */
+  crewRoles?: CrewRole[];
 }
 
 export type StopKind = 'stop' | 'pass';
@@ -397,6 +420,91 @@ export interface Assignment {
   date: IsoDate;
   dutyId: DutyId;
   formationId: FormationId;
+}
+
+// ---------------------------------------------------------------------------
+// 乗務員
+// ---------------------------------------------------------------------------
+
+/**
+ * 乗務員行路 is a second, independent covering of the same trains.
+ *
+ * A `Duty` follows the *stock*: its legs are whole trains, because a formation
+ * that starts a train finishes it. A `CrewDuty` follows a *person*, and a
+ * person is not tied to the vehicle — they get off at a relief point and the
+ * set carries on with somebody else, or they stay on board across a turnback
+ * the stock makes without them. So the two coverings genuinely differ, and a
+ * crew leg has to be able to name part of a train rather than all of it.
+ *
+ * Everything else is deliberately the same shape as `Duty`: an ordered leg
+ * list, day types, and a separate join table saying who works it on a date.
+ * The continuity check, the Gantt and the auto-composer are all the same idea
+ * applied to a different resource.
+ */
+export type CrewRole = 'driver' | 'conductor';
+
+export const CREW_ROLES: readonly CrewRole[] = ['driver', 'conductor'];
+
+export const CREW_ROLE_LABEL: Record<CrewRole, string> = {
+  driver: '運転士',
+  conductor: '車掌',
+};
+
+/**
+ * `fromIndex`/`toIndex` are indices into `Train.stops`, so a leg can cover
+ * part of a train. `fromIndex < toIndex` always; the crew boards at the
+ * departure of `fromIndex` and leaves at the arrival of `toIndex`.
+ *
+ * `deadhead` is 添乗 — riding someone else's train as a passenger to get back
+ * to where the next piece of work is, or home to the base. It occupies the
+ * person but is not乗務, so the working-time check counts it as 拘束 and not
+ * as 実乗務.
+ */
+export type CrewLeg =
+  | { kind: 'train'; trainId: TrainId; fromIndex: number; toIndex: number }
+  | { kind: 'deadhead'; trainId: TrainId; fromIndex: number; toIndex: number }
+  | { kind: 'break'; stationId: StationId; from: Sec; to: Sec }
+  | { kind: 'standby'; stationId: StationId; from: Sec; to: Sec };
+
+export const CREW_LEG_KIND_LABEL: Record<CrewLeg['kind'], string> = {
+  train: '乗務',
+  deadhead: '添乗',
+  break: '休憩',
+  standby: '待機',
+};
+
+/** 乗務員行路 — a *plan* for one person-day. Not a person. */
+export interface CrewDuty {
+  id: CrewDutyId;
+  /** 行路番号 — '11仕'. */
+  code: string;
+  role: CrewRole;
+  /** Where this duty signs on and off. */
+  baseStationId: StationId;
+  dayTypeIds: DayTypeId[];
+  /** Ordered by time. */
+  legs: CrewLeg[];
+  color?: string;
+}
+
+/** 乗務員 — a person. */
+export interface Crew {
+  id: CrewId;
+  /** 乗務員番号. */
+  code: string;
+  name: string;
+  role: CrewRole;
+  /** 所属 — the base whose duties this person can be given. */
+  baseStationId: StationId;
+  note?: string;
+}
+
+/** Who works which 乗務員行路 on which date. */
+export interface CrewAssignment {
+  id: CrewAssignmentId;
+  date: IsoDate;
+  crewDutyId: CrewDutyId;
+  crewId: CrewId;
 }
 
 export interface FormationSeries {
@@ -503,6 +611,29 @@ export interface ValidationConfig {
   overtakeClearanceSec: number;
   /** Fraction of an inspection interval after which a warning is raised. */
   inspectionWarnRatio: number;
+
+  // -- 乗務員 --------------------------------------------------------------
+  // Working rules are an operator's agreement, not a law of physics, so every
+  // one of them is a number here rather than a constant in a rule.
+  /** 連続乗務時間の上限 — how long a crew may work without a 休憩. */
+  crewMaxContinuousWorkSec: number;
+  /** A gap shorter than this is 待機, not 休憩, and does not reset the clock. */
+  crewMinBreakSec: number;
+  /**
+   * Total 休憩 a duty must contain — required only of a duty whose 実乗務時間
+   * reaches `crewMaxContinuousWorkSec`, since a shorter duty never needs one.
+   */
+  crewMinTotalBreakSec: number;
+  /** 拘束時間の上限 — sign-on to sign-off. */
+  crewMaxSpreadSec: number;
+  /** 実乗務時間の上限 — the 乗務 legs only; 添乗 and 待機 do not count. */
+  crewMaxWorkSec: number;
+  /** Minimum time between leaving one train and boarding the next. */
+  crewMinHandoverSec: number;
+  /** 出勤点呼 — time before the first leg that the duty already occupies. */
+  crewSignOnSec: number;
+  /** 退勤点呼 — time after the last leg. */
+  crewSignOffSec: number;
 }
 
 export interface ProjectSettings {
@@ -548,4 +679,7 @@ export interface ProjectDocument {
   dayTypes: Entities<DayType>;
   calendar: CalendarEntry[];
   assignments: Entities<Assignment>;
+  crew: Entities<Crew>;
+  crewDuties: Entities<CrewDuty>;
+  crewAssignments: Entities<CrewAssignment>;
 }

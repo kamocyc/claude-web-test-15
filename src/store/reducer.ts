@@ -12,6 +12,11 @@ import { ID_PREFIX } from '@/domain/ids';
 import type { DayTypeId, StationId, StationTrackId, TrainId } from '@/domain/ids';
 import type {
   Assignment,
+  Crew,
+  CrewAssignment,
+  CrewDuty,
+  CrewLeg,
+  CrewRole,
   Direction,
   Duty,
   DutyLeg,
@@ -24,6 +29,8 @@ import type {
 } from '@/domain/model';
 import {
   buildLinkLookup,
+  crewLegSpan,
+  isReliefPoint,
   rebuildLinks,
   trainStartSec,
   trainTerminusStationId,
@@ -102,6 +109,11 @@ function removeTrackReferences(draft: ProjectDocument, trackId: StationTrackId):
 function removeTrainReferences(draft: ProjectDocument, ids: Set<string>): void {
   for (const duty of entityList(draft.duties)) {
     duty.legs = duty.legs.filter((leg) => leg.kind !== 'train' || !ids.has(leg.trainId));
+  }
+  for (const duty of entityList(draft.crewDuties)) {
+    duty.legs = duty.legs.filter(
+      (leg) => (leg.kind !== 'train' && leg.kind !== 'deadhead') || !ids.has(leg.trainId),
+    );
   }
   for (const train of entityList(draft.trains)) {
     for (const stop of train.stops) {
@@ -386,6 +398,155 @@ function firstStartOf(draft: ProjectDocument, chain: Chain): number {
   if (first.kind !== 'train') return first.from;
   const train = getEntity(draft.trains, first.trainId);
   return train === undefined ? 0 : (trainStartSec(train) ?? 0);
+}
+
+// ---------------------------------------------------------------------------
+// crewDuty/autoAssign
+// ---------------------------------------------------------------------------
+
+interface CrewChain {
+  legs: CrewLeg[];
+  endSec: number;
+  endStationId: StationId | undefined;
+  /** Seconds worked since the chain started — there are no breaks in here. */
+  workedSec: number;
+  startSec: number;
+  startStationId: StationId | undefined;
+}
+
+/**
+ * Chain trains into 乗務員行路 the same way `autoAssignDuties` chains them into
+ * 運用, with three differences that are the whole point of the crew being
+ * modelled separately: the change-over margin is `crewMinHandoverSec` rather
+ * than the station's turnback minimum, the hand-over station has to be a
+ * 交代可能駅, and a chain is cut once it would run past the continuous-work
+ * limit.
+ *
+ * What it deliberately does *not* do — and what the seed generator does — is
+ * close both ends of a chain at a 乗務員基地 with 添乗 legs, and place 休憩
+ * where they can actually be taken. This button gives you a starting point;
+ * `crew.notAtBase` and `crew.breakInsufficient` will then tell you what is
+ * left to do, which is a better division of labour than a button that
+ * silently invents 回送.
+ */
+export function autoAssignCrewDuties(
+  draft: ProjectDocument,
+  dayTypeId: DayTypeId,
+  role: CrewRole,
+): void {
+  for (const duty of entityList(draft.crewDuties)) {
+    if (duty.role === role && duty.dayTypeIds.includes(dayTypeId)) {
+      removeEntity(draft.crewDuties, duty.id);
+      for (const a of entityList(draft.crewAssignments)) {
+        if (a.crewDutyId === duty.id) removeEntity(draft.crewAssignments, a.id);
+      }
+    }
+  }
+
+  const doc = current(draft);
+  const trains = entityList(draft.trains)
+    .filter((t) => t.dayTypeIds.includes(dayTypeId))
+    .filter((t) => (doc.trainTypes.byId[t.typeId]?.crewRoles ?? ['driver']).includes(role))
+    .filter((t) => trainStartSec(t) !== undefined && t.stops.length > 1)
+    .sort((a, b) => (trainStartSec(a) ?? 0) - (trainStartSec(b) ?? 0) || a.id.localeCompare(b.id));
+
+  const margin = draft.validationConfig.crewMinHandoverSec;
+  const limit = draft.validationConfig.crewMaxContinuousWorkSec;
+  const chains: CrewChain[] = [];
+
+  for (const train of trains) {
+    const start = trainStartSec(train) ?? 0;
+    const end = lastTimeOf(train);
+    const originId = trainOriginStationId(train);
+    const ride = end - start;
+
+    let best: CrewChain | undefined;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const chain of chains) {
+      if (chain.endStationId === undefined || chain.endStationId !== originId) continue;
+      if (!isReliefPoint(doc, chain.endStationId)) continue;
+      const gap = start - chain.endSec;
+      if (gap < margin) continue;
+      if (end - chain.startSec > limit) continue;
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = chain;
+      }
+    }
+
+    if (best === undefined) {
+      best = {
+        legs: [],
+        endSec: start,
+        endStationId: originId,
+        workedSec: 0,
+        startSec: start,
+        startStationId: originId,
+      };
+      chains.push(best);
+    } else if (start - best.endSec >= CREW_STANDBY_MIN_SEC && best.endStationId !== undefined) {
+      best.legs.push({
+        kind: 'standby',
+        stationId: best.endStationId,
+        from: best.endSec,
+        to: start,
+      });
+    }
+    best.legs.push({ kind: 'train', trainId: train.id, fromIndex: 0, toIndex: train.stops.length - 1 });
+    best.endSec = end;
+    best.endStationId = trainTerminusStationId(train);
+    best.workedSec += ride;
+  }
+
+  chains.sort((a, b) => a.startSec - b.startSec);
+  chains.forEach((chain, i) => {
+    const base = chain.startStationId;
+    if (base === undefined) return;
+    const duty: CrewDuty = {
+      id: newId<'CrewDuty'>(ID_PREFIX.crewDuty),
+      code: `${String(i + 1).padStart(2, '0')}仕`,
+      role,
+      baseStationId: base,
+      dayTypeIds: [dayTypeId],
+      legs: chain.legs,
+    };
+    putEntity(draft.crewDuties, duty);
+  });
+}
+
+/** Shorter than this and a wait is not worth a bar on the 行路表. */
+const CREW_STANDBY_MIN_SEC = 300;
+
+export function autoFillCrewAssignments(draft: ProjectDocument, date: string): void {
+  const dayTypeId = dayTypeOfDate(draft, date);
+  if (dayTypeId === undefined) return;
+
+  const onDate = entityList(draft.crewAssignments).filter((a) => a.date === date);
+  const usedCrew = new Set(onDate.map((a) => a.crewId));
+  const covered = new Set(onDate.map((a) => a.crewDutyId));
+
+  const duties = entityList(draft.crewDuties)
+    .filter((d) => d.dayTypeIds.includes(dayTypeId))
+    .filter((d) => !covered.has(d.id))
+    .sort((a, b) => a.code.localeCompare(b.code));
+
+  const free = entityList(draft.crew).filter((c) => !usedCrew.has(c.id));
+
+  for (const duty of duties) {
+    // Role first, then 所属 — a driver from another base is a stretch, a
+    // conductor driving is not a thing.
+    let i = free.findIndex((c) => c.role === duty.role && c.baseStationId === duty.baseStationId);
+    if (i < 0) i = free.findIndex((c) => c.role === duty.role);
+    if (i < 0) continue;
+    const person = free.splice(i, 1)[0]!;
+    const assignment: CrewAssignment = {
+      id: newId<'CrewAssignment'>(ID_PREFIX.crewAssignment),
+      date,
+      crewDutyId: duty.id,
+      crewId: person.id,
+    };
+    putEntity(draft.crewAssignments, assignment);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -819,6 +980,115 @@ export function reduce(draft: ProjectDocument, cmd: Command): void {
     }
     case 'duty/autoAssign':
       autoAssignDuties(draft, cmd.dayTypeId);
+      return;
+
+    // -- 乗務員 -------------------------------------------------------------
+    case 'crewDuty/add':
+      putEntity(draft.crewDuties, cmd.duty);
+      return;
+    case 'crewDuty/addMany':
+      for (const duty of cmd.duties) putEntity(draft.crewDuties, duty);
+      return;
+    case 'crewDuty/update': {
+      const duty = getEntity(draft.crewDuties, cmd.id);
+      if (duty === undefined) return;
+      applyPatch(duty as Omit<CrewDuty, 'legs'>, cmd.patch);
+      return;
+    }
+    case 'crewDuty/insertLeg': {
+      const duty = getEntity(draft.crewDuties, cmd.crewDutyId);
+      if (duty === undefined) return;
+      const at = cmd.atIndex;
+      if (at === undefined || at < 0 || at >= duty.legs.length) duty.legs.push(cmd.leg);
+      else duty.legs.splice(at, 0, cmd.leg);
+      return;
+    }
+    case 'crewDuty/replaceLeg': {
+      const duty = getEntity(draft.crewDuties, cmd.crewDutyId);
+      if (duty === undefined) return;
+      if (cmd.legIndex < 0 || cmd.legIndex >= duty.legs.length) return;
+      duty.legs[cmd.legIndex] = cmd.leg;
+      return;
+    }
+    case 'crewDuty/removeLeg': {
+      const duty = getEntity(draft.crewDuties, cmd.crewDutyId);
+      if (duty === undefined) return;
+      if (cmd.legIndex < 0 || cmd.legIndex >= duty.legs.length) return;
+      duty.legs.splice(cmd.legIndex, 1);
+      return;
+    }
+    case 'crewDuty/reorderLegs': {
+      const duty = getEntity(draft.crewDuties, cmd.crewDutyId);
+      if (duty === undefined) return;
+      const next: CrewLeg[] = [];
+      for (const i of cmd.order) {
+        const leg = duty.legs[i];
+        if (leg !== undefined) next.push(leg);
+      }
+      if (next.length !== duty.legs.length) return;
+      duty.legs = next;
+      return;
+    }
+    case 'crewDuty/sortLegsByTime': {
+      const duty = getEntity(draft.crewDuties, cmd.crewDutyId);
+      if (duty === undefined) return;
+      const doc = current(draft);
+      const startOf = (leg: CrewLeg): number =>
+        crewLegSpan(doc, leg)?.from ?? Number.POSITIVE_INFINITY;
+      duty.legs = duty.legs.slice().sort((a, b) => startOf(a) - startOf(b));
+      return;
+    }
+    case 'crewDuty/remove': {
+      const ids = new Set<string>(cmd.crewDutyIds);
+      for (const id of cmd.crewDutyIds) removeEntity(draft.crewDuties, id);
+      for (const a of entityList(draft.crewAssignments)) {
+        if (ids.has(a.crewDutyId)) removeEntity(draft.crewAssignments, a.id);
+      }
+      return;
+    }
+    case 'crewDuty/autoAssign':
+      autoAssignCrewDuties(draft, cmd.dayTypeId, cmd.role);
+      return;
+    case 'crew/add':
+      putEntity(draft.crew, cmd.crew);
+      return;
+    case 'crew/update': {
+      const person = getEntity(draft.crew, cmd.id);
+      if (person === undefined) return;
+      applyPatch(person as Crew, cmd.patch);
+      return;
+    }
+    case 'crew/remove': {
+      removeEntity(draft.crew, cmd.id);
+      for (const a of entityList(draft.crewAssignments)) {
+        if (a.crewId === cmd.id) removeEntity(draft.crewAssignments, a.id);
+      }
+      return;
+    }
+    case 'crewAssignment/set': {
+      for (const a of entityList(draft.crewAssignments)) {
+        if (a.date === cmd.date && a.crewDutyId === cmd.crewDutyId && a.id !== cmd.id) {
+          removeEntity(draft.crewAssignments, a.id);
+        }
+      }
+      putEntity(draft.crewAssignments, {
+        id: cmd.id,
+        date: cmd.date,
+        crewDutyId: cmd.crewDutyId,
+        crewId: cmd.crewId,
+      });
+      return;
+    }
+    case 'crewAssignment/clear': {
+      for (const a of entityList(draft.crewAssignments)) {
+        if (a.date === cmd.date && a.crewDutyId === cmd.crewDutyId) {
+          removeEntity(draft.crewAssignments, a.id);
+        }
+      }
+      return;
+    }
+    case 'crewAssignment/autoFill':
+      autoFillCrewAssignments(draft, cmd.date);
       return;
 
     // -- rolling stock -----------------------------------------------------

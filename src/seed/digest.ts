@@ -9,7 +9,7 @@
 
 import { entityList } from '@/domain/units';
 import type { ProjectDocument } from '@/domain/model';
-import { dutySpan, trainDistance } from '@/domain/project';
+import { crewDutySpread, crewWorkingSec, dutySpan, trainDistance } from '@/domain/project';
 
 export interface SeedDigest {
   stations: number;
@@ -31,6 +31,14 @@ export interface SeedDigest {
   inspectionRecords: number;
   totalKm: number;
   peakConcurrentDuties: number;
+  crewDuties: number;
+  crewDutiesByRole: Record<string, number>;
+  crewLegsByKind: Record<string, number>;
+  crew: number;
+  crewAssignments: number;
+  /** 実乗務 across every 行路, in whole hours. */
+  crewWorkHours: number;
+  peakConcurrentCrewDuties: number;
 }
 
 export function projectDigest(doc: ProjectDocument): SeedDigest {
@@ -73,6 +81,21 @@ export function projectDigest(doc: ProjectDocument): SeedDigest {
     formationsByCars[cars] = (formationsByCars[cars] ?? 0) + 1;
   }
 
+  const crewDuties = entityList(doc.crewDuties);
+  const crewDutiesByRole: Record<string, number> = {};
+  const crewLegsByKind: Record<string, number> = {};
+  const crewSpans: Array<{ from: number; to: number }> = [];
+  let crewWorkSec = 0;
+  for (const duty of crewDuties) {
+    crewDutiesByRole[duty.role] = (crewDutiesByRole[duty.role] ?? 0) + 1;
+    for (const leg of duty.legs) {
+      crewLegsByKind[leg.kind] = (crewLegsByKind[leg.kind] ?? 0) + 1;
+    }
+    crewWorkSec += crewWorkingSec(doc, duty);
+    const spread = crewDutySpread(doc, duty);
+    if (spread !== undefined) crewSpans.push({ from: spread.from, to: spread.to });
+  }
+
   return {
     stations: doc.stations.allIds.length,
     stationTracks: doc.stationTracks.allIds.length,
@@ -93,6 +116,13 @@ export function projectDigest(doc: ProjectDocument): SeedDigest {
     inspectionRecords: doc.inspectionRecords.allIds.length,
     totalKm: Math.round(totalMeters / 1000),
     peakConcurrentDuties: peakOverlap(spans),
+    crewDuties: crewDuties.length,
+    crewDutiesByRole,
+    crewLegsByKind,
+    crew: doc.crew.allIds.length,
+    crewAssignments: doc.crewAssignments.allIds.length,
+    crewWorkHours: Math.round(crewWorkSec / 3600),
+    peakConcurrentCrewDuties: peakOverlap(crewSpans),
   };
 }
 

@@ -4,6 +4,19 @@ exports[`決定性とダイジェスト > matches the digest baseline 1`] = `
 {
   "assignments": 35,
   "connectionStops": 142,
+  "crew": 69,
+  "crewAssignments": 69,
+  "crewDuties": 69,
+  "crewDutiesByRole": {
+    "driver": 69,
+  },
+  "crewLegsByKind": {
+    "break": 30,
+    "deadhead": 2,
+    "standby": 420,
+    "train": 548,
+  },
+  "crewWorkHours": 234,
   "deadheadTrains": 70,
   "duties": 35,
   "dutiesByCars": {
@@ -18,6 +31,7 @@ exports[`決定性とダイジェスト > matches the digest baseline 1`] = `
   "inspectionRecords": 94,
   "links": 22,
   "overtakenStops": 142,
+  "peakConcurrentCrewDuties": 26,
   "peakConcurrentDuties": 20,
   "serviceTrains": 478,
   "stationTracks": 70,

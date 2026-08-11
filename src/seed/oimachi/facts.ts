@@ -582,6 +582,10 @@ interface StationSpec {
   defaultUp?: string;
   /** 渡り線 out beyond the roads' own turnouts. See `StationCrossover`. */
   crossovers?: StationCrossover[];
+  /** 乗務員交代可能駅. */
+  crewChange?: boolean;
+  /** 乗務員基地 — 出勤・退勤・休憩ができる場所. Implies `crewChange`. */
+  crewBase?: boolean;
 }
 
 const STATION_SPECS: readonly StationSpec[] = [
@@ -597,6 +601,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['JR京浜東北線', '東京臨海高速鉄道りんかい線'],
     defaultDown: '1番線',
     defaultUp: '2番線',
+    crewBase: true,
   },
   {
     key: 'shimoshimmei',
@@ -710,6 +715,8 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['東急東横線'],
     defaultDown: '1番線',
     defaultUp: '2番線',
+    // 交代はできるが基地ではない。ここで終わる行路は基地まで添乗して帰る。
+    crewChange: true,
     // 片渡り線, 溝の口方 — beyond the 引上線's own points, which is the whole
     // reason it is here. The tail track is switched onto the 下り線 only, so
     // stock that arrived at 2番線 (= the 上り線) reaches it by running out past
@@ -819,6 +826,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['東急田園都市線', 'JR南武線(武蔵溝ノ口)'],
     defaultDown: '2番線',
     defaultUp: '3番線',
+    crewBase: true,
   },
   // --- 田園都市線 section: km posts are APPROXIMATE, measured on the 大井町
   //     axis rather than the real 渋谷 origin. See the file header.
@@ -857,6 +865,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     transfers: ['東急田園都市線'],
     defaultDown: '1番線',
     defaultUp: '4番線',
+    crewBase: true,
   },
   // --- synthetic depot nodes -------------------------------------------------
   {
@@ -870,6 +879,8 @@ const STATION_SPECS: readonly StationSpec[] = [
     layout: 'depotYard',
     kind: 'depot',
     crossovers: YARD_NECK,
+    // 出庫回送に乗るのは車庫で乗り込む乗務員なので、ここも基地である。
+    crewBase: true,
   },
   {
     key: 'nagatsutaWorks',
@@ -1157,6 +1168,8 @@ export function buildFacts(): Facts {
       defaultTrackId: { down: downTrack.id, up: upTrack.id },
       isConnectionPoint: spec.isConnectionPoint ?? false,
       ...(spec.crossovers === undefined ? {} : { crossovers: spec.crossovers.map((c) => ({ ...c })) }),
+      ...(spec.crewChange === true ? { crewChange: true } : {}),
+      ...(spec.crewBase === true ? { crewBase: true } : {}),
       ...(spec.code === undefined ? {} : { code: spec.code }),
       ...(spec.transfers === undefined ? {} : { transfers: [...spec.transfers] }),
     };

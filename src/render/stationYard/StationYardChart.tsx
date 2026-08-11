@@ -39,6 +39,12 @@ import { formatTime, formatTimeCompact } from '@/domain/time';
 import { getTheme } from '../canvas/theme';
 import { withAlpha } from '../canvas/theme';
 import { getRenderScene, useSceneGeneration } from '../scene';
+import {
+  niceTimeTicks,
+  panTimeWindow,
+  zoomTimeWindow,
+  type TimeWindow,
+} from '../timeAxis';
 import type { StationYardProps } from '../types';
 import { computeYardLayout, laneAtY, type YardBar, type YardLayout } from './layout';
 
@@ -85,10 +91,7 @@ interface DragState {
 }
 
 /** The visible time window, or `undefined` while it is the whole day. */
-interface TimeView {
-  from: number;
-  to: number;
-}
+type TimeView = TimeWindow;
 
 export function StationYardChart(props: StationYardProps) {
   const { stationId, onSelect, onReassignTrack, highlightTrainId, className } = props;
@@ -150,31 +153,14 @@ export function StationYardChart(props: StationYardProps) {
 
   // -- zoom and pan ---------------------------------------------------------
   /** Keep a window inside the day, at a legible width. */
-  const clampView = useCallback(
-    (next: TimeView): TimeView | undefined => {
-      const full = Math.max(1, fullTo - fullFrom);
-      const wanted = Math.min(Math.max(next.to - next.from, MIN_SPAN_SEC), full);
-      if (wanted >= full) return undefined;
-      let start = next.from;
-      if (start < fullFrom) start = fullFrom;
-      if (start + wanted > fullTo) start = fullTo - wanted;
-      return { from: start, to: start + wanted };
-    },
-    [fullFrom, fullTo],
-  );
-
   /** Zoom by `factor` about a time that must stay put. */
   const zoomAbout = useCallback(
     (factor: number, anchorSec: number) => {
-      setView((current) => {
-        const f = current?.from ?? fullFrom;
-        const t = current?.to ?? fullTo;
-        const nextSpan = (t - f) / factor;
-        const share = (anchorSec - f) / Math.max(1, t - f);
-        return clampView({ from: anchorSec - nextSpan * share, to: anchorSec + nextSpan * (1 - share) });
-      });
+      setView((current) =>
+        zoomTimeWindow(current, { from: fullFrom, to: fullTo }, factor, anchorSec, MIN_SPAN_SEC),
+      );
     },
-    [clampView, fullFrom, fullTo],
+    [fullFrom, fullTo],
   );
 
   // -- drag -----------------------------------------------------------------
@@ -281,10 +267,11 @@ export function StationYardChart(props: StationYardProps) {
     (e: React.PointerEvent<SVGSVGElement>) => {
       const p = panRef.current;
       if (p === null) return;
-      const dt = ((e.clientX - p.x) / plotW) * (p.to - p.from);
-      setView(clampView({ from: p.from - dt, to: p.to - dt }));
+      setView(
+        panTimeWindow(p, e.clientX - p.x, plotW, { from: fullFrom, to: fullTo }, MIN_SPAN_SEC),
+      );
     },
-    [clampView, plotW],
+    [fullFrom, fullTo, plotW],
   );
   const endPan = useCallback(() => {
     panRef.current = null;
@@ -599,18 +586,3 @@ export function StationYardChart(props: StationYardProps) {
 }
 
 /** Round time ticks that stay at least ~70 px apart. */
-function niceTimeTicks(from: number, to: number, plotW: number): number[] {
-  const steps = [60, 300, 600, 900, 1800, 3600, 7200, 14400];
-  const span = Math.max(1, to - from);
-  const pxPerSec = plotW / span;
-  let step = steps[steps.length - 1]!;
-  for (const s of steps) {
-    if (s * pxPerSec >= 70) {
-      step = s;
-      break;
-    }
-  }
-  const out: number[] = [];
-  for (let t = Math.ceil(from / step) * step; t <= to; t += step) out.push(t);
-  return out;
-}
