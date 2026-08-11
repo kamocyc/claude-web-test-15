@@ -15,6 +15,8 @@ export * from './types';
 export { LineViewCanvas } from './lineView/LineViewCanvas';
 export { StringDiagramCanvas } from './stringDiagram/StringDiagramCanvas';
 export { StationYardChart } from './stationYard/StationYardChart';
+export { StationWiringDiagram } from './stationWiring/StationWiringDiagram';
+export { computeWiringDiagram, routesOfRoad } from './stationWiring/layout';
 
 // State wiring -------------------------------------------------------------
 export {

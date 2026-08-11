@@ -206,8 +206,22 @@ interface TrackSpec {
  */
 const OM_LEAD = '大井町線';
 
-/** The single lead every road in a yard fans off. */
+/**
+ * The single lead every road in a yard fans off, and the neck that joins it to
+ * the running line.
+ *
+ * A yard is one ladder off one lead, not ten roads each switched onto the main
+ * line, and saying it that way is both truer and an order of magnitude less
+ * pointwork: 鷺沼車庫 goes from thirty turnouts to ten and a neck. The neck is
+ * a `StationCrossover` because that is exactly what one is here — a connection
+ * between two leads, out beyond every road turnout in the throat.
+ */
 const YARD_LEAD = '構内';
+
+const YARD_NECK: StationCrossover[] = [
+  { end: 'up', from: YARD_LEAD, to: 'down', name: '出入庫線' },
+  { end: 'up', from: YARD_LEAD, to: 'up', name: '出入庫線' },
+];
 
 /** 本線がそのまま入る番線 — the common case, spelled once. */
 function line(...directions: Direction[]): TrackWiring {
@@ -523,7 +537,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
         maxCars: 10,
         ...YARD,
         role: 'depot' as const,
-        wiring: { ends: ['up'], ladder: i, connects: { up: [YARD_LEAD, 'down', 'up'] } },
+        wiring: { ends: ['up'], ladder: i, connects: { up: [YARD_LEAD] } },
       }));
     case 'works':
       return [1, 2].map((n) => ({
@@ -537,7 +551,7 @@ function layoutTracks(layout: LayoutKind): TrackSpec[] {
         maxCars: 10,
         ...YARD,
         role: 'depot' as const,
-        wiring: { ends: ['up'], ladder: n - 1, connects: { up: [YARD_LEAD, 'down', 'up'] } },
+        wiring: { ends: ['up'], ladder: n - 1, connects: { up: [YARD_LEAD] } },
       }));
   }
 }
@@ -855,6 +869,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     minTurnbackSec: 300,
     layout: 'depotYard',
     kind: 'depot',
+    crossovers: YARD_NECK,
   },
   {
     key: 'nagatsutaWorks',
@@ -868,6 +883,7 @@ const STATION_SPECS: readonly StationSpec[] = [
     minTurnbackSec: 600,
     layout: 'works',
     kind: 'depot',
+    crossovers: YARD_NECK,
   },
 ];
 

@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TrainId } from '@/domain/ids';
 import type { Link, LinkRunTime, ProjectDocument, StationTrack, Train } from '@/domain/model';
-import { computeStationWiring } from '@/domain/wiring';
+import { computeStationWiring, shuntMove } from '@/domain/wiring';
 import { entityList } from '@/domain/units';
 import { SEC_PER_DAY, intervalsOverlap } from '@/domain/time';
 import { runValidation } from '@/validation/run';
@@ -375,6 +375,64 @@ describe('自由が丘の引上線', () => {
       for (const stop of train.stops) if (stop.trackId === tail().id) users.add(train.number);
     }
     expect([...users]).toEqual([]);
+  });
+
+  it('is switched onto the 下り線 alone, and reached over the 片渡り線', () => {
+    const station = stationNamed('自由が丘');
+    expect(tail().wiring?.connects).toEqual({ down: ['down'] });
+    expect(station.crossovers).toEqual([
+      { end: 'down', from: 'up', to: 'down', name: '片渡り線' },
+    ]);
+
+    // The one duty that uses it arrives on the up platform — which at a 相対式
+    // station IS the 上り線 — so the shunt into the tail track has to work
+    // through the crossover, and the shunt back out does not.
+    const wiring = computeStationWiring(doc, station.id);
+    const duty = entityList(doc.duties).find((d) =>
+      d.legs.some((l) => l.kind === 'stable' && l.trackId === tail().id),
+    )!;
+    const legs = duty.legs.filter((l) => l.kind === 'train');
+    const out = doc.trains.byId[(legs[0] as { trainId: TrainId }).trainId]!;
+    const back = doc.trains.byId[(legs[1] as { trainId: TrainId }).trainId]!;
+    const arrived = out.stops[out.stops.length - 1]!.trackId!;
+    const left = back.stops[0]!.trackId!;
+    expect(shuntMove(wiring, arrived, tail().id)!.routing).toBe('crossover');
+    expect(shuntMove(wiring, tail().id, left)!.routing).toBe('direct');
+  });
+});
+
+describe('溝の口の鷺沼方', () => {
+  const mizonokuchi = () => stationNamed('溝の口');
+  const trackNamed = (name: string) =>
+    entityList(doc.stationTracks).find(
+      (t) => t.stationId === mizonokuchi().id && t.name === name,
+    )!;
+
+  it('puts the 大井町線 faces on a lead of their own beyond the platform ends', () => {
+    expect(trackNamed('2番線').wiring?.connects).toEqual({ down: ['大井町線'] });
+    expect(trackNamed('3番線').wiring?.connects).toEqual({ down: ['大井町線'] });
+    expect(trackNamed('引上1号線').wiring?.connects).toEqual({
+      down: ['大井町線', 'down', 'up'],
+    });
+  });
+
+  it('terminates every 鷺沼-side 回送 in a 引上線, never on a face', () => {
+    const km = mizonokuchi().kmFromOrigin;
+    const beyond = (stationId: string): boolean =>
+      (doc.stations.byId[stationId]?.kmFromOrigin ?? 0) > km;
+    const faces = new Set([trackNamed('2番線').id, trackNamed('3番線').id]);
+    const offending: string[] = [];
+    for (const train of trains) {
+      train.stops.forEach((stop, i) => {
+        if (stop.stationId !== mizonokuchi().id) return;
+        const touchesSaginumaSide =
+          (train.stops[i - 1] !== undefined && beyond(train.stops[i - 1]!.stationId)) ||
+          (train.stops[i + 1] !== undefined && beyond(train.stops[i + 1]!.stationId));
+        if (!touchesSaginumaSide) return;
+        if (stop.trackId !== undefined && faces.has(stop.trackId)) offending.push(train.number);
+      });
+    }
+    expect(offending).toEqual([]);
   });
 });
 

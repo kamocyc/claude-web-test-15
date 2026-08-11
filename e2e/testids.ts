@@ -72,6 +72,18 @@ export const TID = {
   wiringEnd: (trackId: string, end: string) => `wiring-end-${trackId}-${end}`,
   wiringLadder: (trackId: string) => `wiring-ladder-${trackId}`,
   wiringLine: (trackId: string, direction: string) => `wiring-line-${trackId}-${direction}`,
+  wiringConnects: (trackId: string, end: string) => `wiring-connects-${trackId}-${end}`,
+
+  // 構内配線図 — the drawn, draggable version of the same facts --------------
+  wiringDiagram: 'wiring-diagram',
+  wiringRoad: (trackId: string) => `wiring-road-${trackId}`,
+  wiringTurnout: (trackId: string, end: string, lead: string) =>
+    `wiring-turnout-${trackId}-${end}-${lead}`,
+  wiringCrossoverMark: 'wiring-crossover-mark',
+  wiringRoute: 'wiring-route',
+  wiringCrossoverList: 'wiring-crossover-list',
+  wiringCrossoverAdd: (end: string) => `wiring-crossover-add-${end}`,
+  wiringCrossoverRemove: (index: number) => `wiring-crossover-remove-${index}`,
 
   // links ------------------------------------------------------------------
   linkList: 'link-list',

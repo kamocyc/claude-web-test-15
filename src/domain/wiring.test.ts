@@ -13,8 +13,10 @@ import { buildOimachiProject } from '@/seed';
 import { tracksOfStation } from './project';
 import { entityList } from './units';
 import {
+  canEnterFrom,
   computeStationWiring,
   defaultStubEnd,
+  leadsReachable,
   endsOfTrack,
   ladderOfTrack,
   lineLadder,
@@ -265,5 +267,89 @@ describe('入換', () => {
     expect(
       shuntMove(wiring, trackNamed('自由が丘', '1番線').id, trackNamed('自由が丘', '1番線').id),
     ).toBeUndefined();
+  });
+});
+
+describe('接続先とリード', () => {
+  it('連れて行かれない先には行けない — 鷺沼方から大井町線ホームへは進路がない', () => {
+    const wiring = computeStationWiring(doc, stationNamed('溝の口').id);
+    // A 回送 off the 鷺沼 line reaching the 梶が谷 throat is on a 田園都市線
+    // running line. 2番線 is on the 大井町線 lead and meets neither of them.
+    const intoFace = trainMove(wiring, {
+      kind: 'arrive',
+      trackId: trackNamed('溝の口', '2番線').id,
+      direction: 'up',
+      end: 'down',
+    })!;
+    expect(intoFace.routing).toBe('none');
+
+    const intoTail = trainMove(wiring, {
+      kind: 'arrive',
+      trackId: trackNamed('溝の口', '引上1号線').id,
+      direction: 'up',
+      end: 'down',
+    })!;
+    expect(intoTail.routing).toBe('direct');
+  });
+
+  it('lets the same face be entered from the 大井町 end, which is where it faces', () => {
+    const wiring = computeStationWiring(doc, stationNamed('溝の口').id);
+    const move = trainMove(wiring, {
+      kind: 'arrive',
+      trackId: trackNamed('溝の口', '2番線').id,
+      direction: 'down',
+      end: 'up',
+    })!;
+    expect(move.routing).toBe('direct');
+  });
+
+  it('joins a face and its tail track through the lead they share', () => {
+    const wiring = computeStationWiring(doc, stationNamed('溝の口').id);
+    const move = shuntMove(
+      wiring,
+      trackNamed('溝の口', '2番線').id,
+      trackNamed('溝の口', '引上1号線').id,
+    )!;
+    expect(move.routing).toBe('direct');
+  });
+
+  it('reaches 自由が丘の引上線 from the 下り線 only, and over the 片渡り線 otherwise', () => {
+    const station = stationNamed('自由が丘');
+    const tail = trackNamed('自由が丘', '引上線');
+    expect(canEnterFrom(station, tail, 'down', 'down', 'up')).toBe(true);
+    expect(canEnterFrom(station, tail, 'up', 'down', 'up')).toBe(false);
+
+    // The 上り線 reaches it too, but only because the 片渡り線 is there.
+    expect(canEnterFrom(station, tail, 'down', 'up', 'up')).toBe(true);
+    expect(canEnterFrom({ crossovers: [] }, tail, 'down', 'up', 'up')).toBe(false);
+  });
+
+  it('takes a shunt over the 片渡り線 across the whole throat', () => {
+    const wiring = computeStationWiring(doc, stationNamed('自由が丘').id);
+    const over = shuntMove(
+      wiring,
+      trackNamed('自由が丘', '2番線').id,
+      trackNamed('自由が丘', '引上線').id,
+    )!;
+    expect(over.routing).toBe('crossover');
+    // 1番線 (=下り本線, 0) は横切られる: 2番線 は 1 で引上線 は 2 なのに、
+    // 渡り線まで出て戻るので帯は 0 まで広がる。
+    expect(Math.min(over.from, over.to)).toBe(0);
+    expect(Math.max(over.from, over.to)).toBe(2);
+  });
+
+  it('follows a chain of 渡り線 when working out what a lead reaches', () => {
+    const links = [
+      { end: 'up' as const, from: 'a', to: 'b' },
+      { end: 'up' as const, from: 'b', to: 'down' },
+      { end: 'down' as const, from: 'down', to: 'up' },
+    ];
+    expect([...leadsReachable({ crossovers: links }, 'up', ['a'])].sort()).toEqual([
+      'a',
+      'b',
+      'down',
+    ]);
+    // The 下り方 link is in the other throat and does not join anything here.
+    expect([...leadsReachable({ crossovers: links }, 'up', ['up'])]).toEqual(['up']);
   });
 });
