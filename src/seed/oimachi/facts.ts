@@ -1417,6 +1417,16 @@ export function buildFacts(): Facts {
     color: '#f57e19',
   };
 
+  // Sections joined by a single line, keyed both ways so the lookup needs no
+  // ordering convention. The Oimachi Line has none, so this is empty and the
+  // path search's single-track branch is never entered.
+  const singleTrackPairs = new Set<string>();
+  for (const link of links) {
+    if (link.trackCount !== 1) continue;
+    singleTrackPairs.add(`${link.fromStationId}>${link.toStationId}`);
+    singleTrackPairs.add(`${link.toStationId}>${link.fromStationId}`);
+  }
+
   return {
     dayTypeId,
     line,
@@ -1457,6 +1467,9 @@ export function buildFacts(): Facts {
     deadheadProfileId: car5.id,
     deadheadTypeId: typeIds.deadhead,
     deadheadHeadwaySec: DEADHEAD_HEADWAY_SEC,
+    isSingleTrack(a, b) {
+      return singleTrackPairs.has(`${a}>${b}`);
+    },
     runTime(from, to, profileId) {
       const rt = runTimeByKey.get(`${from}|${to}|${profileId}`);
       if (rt === undefined) {

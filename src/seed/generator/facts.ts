@@ -119,4 +119,18 @@ export interface GeneratorFacts {
   deadheadHeadwaySec: number;
 
   runTime(from: StationId, to: StationId, profileId: PerfProfileId): LinkRunTime;
+
+  /**
+   * Is the section joining these two adjacent stations 単線?
+   *
+   * Symmetric — a section does not have a direction, which is the entire
+   * point. The path search for a 回送 has to ask it because an empty move is
+   * the one train whose timings are still free when it is planned, and on a
+   * single line "is this section clear" means clear of *both* directions.
+   *
+   * This is the same question `headway.singleTrackOpposing` asks of a finished
+   * document. It has to be the same question: a generator that places a path
+   * the checker then rejects is worse than one that fails outright.
+   */
+  isSingleTrack(a: StationId, b: StationId): boolean;
 }

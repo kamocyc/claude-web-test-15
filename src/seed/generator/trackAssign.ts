@@ -61,7 +61,7 @@
 
 import type { StationId, StationTrackId, TrainId } from '@/domain/ids';
 import type { Direction, StationEnd, StationTrack, TrainStop } from '@/domain/model';
-import { intervalsOverlap } from '@/domain/time';
+import { intervalsOverlap, overlapSeconds } from '@/domain/time';
 import { canEnterFrom, defaultStubEnd, endTowards } from '@/domain/wiring';
 import type { Sec } from '@/domain/units';
 import { SeedError } from '../errors';
@@ -190,7 +190,10 @@ export class TrackBooking {
    * `${fromStationId}>${toStationId}` — one bucket per link AND direction, each
    * holding the sorted ENTRY and EXIT instants of the trains already placed.
    */
-  private readonly traversals = new Map<string, { enter: Sec[]; exit: Sec[] }>();
+  private readonly traversals = new Map<
+    string,
+    { enter: Sec[]; exit: Sec[]; spans: Array<{ from: Sec; to: Sec }> }
+  >();
   /** `${stationId}|${trainId}` for trains that must be on a through track. */
   private mustPass = new Set<string>();
   fallbacks = 0;
@@ -432,21 +435,55 @@ export class TrackBooking {
   /** The (link, direction) buckets one train's run touches, with its instants. */
   private static walk(
     train: AssignableTrain,
-  ): Array<{ key: string; enter: Sec; exit: Sec }> {
-    const out: Array<{ key: string; enter: Sec; exit: Sec }> = [];
+  ): Array<{
+    key: string;
+    /** The same section walked the other way — where an opposing train is. */
+    opposingKey: string;
+    from: StationId;
+    to: StationId;
+    enter: Sec;
+    exit: Sec;
+  }> {
+    const out: Array<{
+      key: string;
+      opposingKey: string;
+      from: StationId;
+      to: StationId;
+      enter: Sec;
+      exit: Sec;
+    }> = [];
     for (let i = 1; i < train.stops.length; i++) {
       const prev = train.stops[i - 1]!;
       const cur = train.stops[i]!;
       const enter = prev.dep ?? prev.arr;
       const exit = cur.arr ?? cur.dep;
       if (enter === undefined || exit === undefined) continue;
-      out.push({ key: `${prev.stationId}>${cur.stationId}`, enter, exit });
+      out.push({
+        key: `${prev.stationId}>${cur.stationId}`,
+        opposingKey: `${cur.stationId}>${prev.stationId}`,
+        from: prev.stationId,
+        to: cur.stationId,
+        enter,
+        exit,
+      });
     }
     return out;
   }
 
   private traversalsClear(train: AssignableTrain, minSec: number): boolean {
     for (const t of TrackBooking.walk(train)) {
+      // 単線: the section has to be clear of the *opposing* direction outright.
+      // Not a headway — an interval. Two trains coming the other way cannot be
+      // spaced apart, they can only be kept out of the section altogether, and
+      // the place they get past each other is a station with two roads.
+      if (this.facts.isSingleTrack(t.from, t.to)) {
+        const opposing = this.traversals.get(t.opposingKey);
+        if (opposing !== undefined) {
+          for (const span of opposing.spans) {
+            if (overlapSeconds(t.enter, t.exit, span.from, span.to) > 0) return false;
+          }
+        }
+      }
       const bucket = this.traversals.get(t.key);
       if (bucket === undefined) continue;
       if (!gapOk(bucket.enter, t.enter, minSec)) return false;
@@ -457,9 +494,10 @@ export class TrackBooking {
 
   private addTraversals(train: AssignableTrain): void {
     for (const t of TrackBooking.walk(train)) {
-      const bucket = this.traversals.get(t.key) ?? { enter: [], exit: [] };
+      const bucket = this.traversals.get(t.key) ?? { enter: [], exit: [], spans: [] };
       insertSorted(bucket.enter, t.enter);
       insertSorted(bucket.exit, t.exit);
+      bucket.spans.push({ from: t.enter, to: t.exit });
       this.traversals.set(t.key, bucket);
     }
   }
