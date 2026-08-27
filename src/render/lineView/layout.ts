@@ -54,7 +54,7 @@
 
 import type { DepotId, StationId, StationTrackId } from '@/domain/ids';
 import type { Direction, ProjectDocument, Station, StationTrack } from '@/domain/model';
-import { orderedStations, tracksOfStation } from '@/domain/project';
+import { isSingleTrackLine, orderedStations, tracksOfStation } from '@/domain/project';
 import type { Meters } from '@/domain/units';
 import { entityList } from '@/domain/units';
 import { defaultStubEnd, ladderOfTrack } from '@/domain/wiring';
@@ -179,6 +179,17 @@ export interface SectionLane extends LaneCommon {
   fromStationId: StationId;
   toStationId: StationId;
   direction: Direction;
+  /**
+   * 単線 — one set of rails that both directions run over.
+   *
+   * A single-track line has one running lane, so the down and up sections
+   * would otherwise be two identical lanes stacked on the same index: drawn
+   * twice, and listed twice to anything reading the lanes rather than the
+   * pixels. There is one section instead, and it is marked as carrying both
+   * ways. `direction` stays `'down'` so that anything keyed off it still has
+   * an answer; on a single line the answer is simply "both".
+   */
+  bidirectional?: boolean;
   /** Index of the section: between ordered stations `i` and `i + 1`. */
   sectionIndex: number;
 }
@@ -381,7 +392,12 @@ export function assignStationLanes(
   const free: number[] = [];
   for (let i = 0; i < lanes; i++) if (!taken[i]) free.push(i);
   const start = Math.max(0, Math.floor((free.length - both.length) / 2));
-  both.forEach((t, i) => {
+  // Through roads before 待避線 here too. On a double-track line every
+  // bidirectional road at a station is a through road, so this changes
+  // nothing; on a single-track line the running lane and the loop are *both*
+  // signalled both ways, and without this the loop takes the running lane
+  // whenever the document happens to list it first.
+  fillOrder(both, false).forEach((t, i) => {
     const lane = free[Math.min(start + i, free.length - 1)] ?? 0;
     out.set(t.id, lane);
   });
@@ -537,9 +553,24 @@ export function computeLineLayout(
     maxThrough = Math.max(maxThrough, through);
     maxStubs = Math.max(maxStubs, stubs);
   }
+  /**
+   * 単線 — the two directions share one set of rails, so they share one lane.
+   *
+   * Drawn the old way, a single-track line got two running lanes and opposing
+   * trains slid past each other on parallel rails that do not exist. The line
+   * view's one promise is that a train is drawn where it is, and two tracks
+   * where there is one breaks it as surely as nudging a marker aside would.
+   *
+   * Note what is NOT collapsed: `mainLaneCount`. The stack still has to be
+   * deep enough for the loop at the passing place, and that loop lands on the
+   * lane below the running one — which means a 交換 draws as a dip out of the
+   * through road and back, the same shape a 待避 already draws. Nothing in the
+   * drawing code had to learn about it.
+   */
+  const singleTrack = isSingleTrackLine(doc);
   const mainLaneCount = Math.max(2, maxThrough, maxStubs + 2);
   const laneDown = 0;
-  const laneUp = mainLaneCount - 1;
+  const laneUp = singleTrack ? laneDown : mainLaneCount - 1;
 
   const lanes: Lane[] = [];
   const stations: StationLayout[] = [];
@@ -671,28 +702,43 @@ export function computeLineLayout(
     const b = stations[i]!;
     const x0 = a.x1;
     const x1 = b.x0;
-    lanes.push({
-      kind: 'section',
-      index: laneDown,
-      x0,
-      x1,
-      label: `${a.name}→${b.name}`,
-      fromStationId: a.stationId,
-      toStationId: b.stationId,
-      direction: 'down',
-      sectionIndex: i - 1,
-    });
-    lanes.push({
-      kind: 'section',
-      index: laneUp,
-      x0,
-      x1,
-      label: `${b.name}→${a.name}`,
-      fromStationId: b.stationId,
-      toStationId: a.stationId,
-      direction: 'up',
-      sectionIndex: i - 1,
-    });
+    if (singleTrack) {
+      lanes.push({
+        kind: 'section',
+        index: laneDown,
+        x0,
+        x1,
+        label: `${a.name}⇄${b.name}`,
+        fromStationId: a.stationId,
+        toStationId: b.stationId,
+        direction: 'down',
+        bidirectional: true,
+        sectionIndex: i - 1,
+      });
+    } else {
+      lanes.push({
+        kind: 'section',
+        index: laneDown,
+        x0,
+        x1,
+        label: `${a.name}→${b.name}`,
+        fromStationId: a.stationId,
+        toStationId: b.stationId,
+        direction: 'down',
+        sectionIndex: i - 1,
+      });
+      lanes.push({
+        kind: 'section',
+        index: laneUp,
+        x0,
+        x1,
+        label: `${b.name}→${a.name}`,
+        fromStationId: b.stationId,
+        toStationId: a.stationId,
+        direction: 'up',
+        sectionIndex: i - 1,
+      });
+    }
   }
 
   // Emphasis is relative to the busiest station, so it can only be settled

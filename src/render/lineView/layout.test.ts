@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { StationTrack } from '@/domain/model';
+import type { ProjectDocument, StationTrack } from '@/domain/model';
 import { kmToMeters } from '@/domain/units';
 import { TOY, toyProjectCopy } from '@/testing/toyProject';
 import {
@@ -825,5 +825,82 @@ describe('laneCenterY', () => {
     expect(laneCenterY(2, 0, 26)).toBe(65);
     // Scrolling the camera down by one lane lifts everything by a lane height.
     expect(laneCenterY(2, 1, 26)).toBe(39);
+  });
+});
+
+describe('computeLineLayout — 単線', () => {
+  /**
+   * The toy line with one set of rails.
+   *
+   * Every road becomes bidirectional, because that is what a single line
+   * actually has: there is no "down platform" where there is no down track.
+   */
+  function singleTrackToy(): ProjectDocument {
+    const doc = toyProjectCopy();
+    for (const id of [TOY.linkAB, TOY.linkBC, TOY.linkCD]) {
+      doc.links.byId[id]!.trackCount = 1;
+    }
+    for (const id of [TOY.a1, TOY.a2, TOY.b1, TOY.c1, TOY.c2, TOY.c3, TOY.d1, TOY.d2]) {
+      doc.stationTracks.byId[id]!.directions = ['down', 'up'];
+    }
+    return doc;
+  }
+
+  it('gives both directions the same running lane', () => {
+    const layout = computeLineLayout(singleTrackToy());
+    expect(layout.laneUp).toBe(layout.laneDown);
+    expect(runningLane(layout, 'down')).toBe(runningLane(layout, 'up'));
+  });
+
+  it('keeps the stack deep enough for the passing loop', () => {
+    // The running lanes collapse; the stack does not. The loop needs somewhere
+    // below the running lane to be, and that is what makes a 交換 legible.
+    const layout = computeLineLayout(singleTrackToy());
+    expect(layout.mainLaneCount).toBe(3);
+    expect(layout.laneOfTrack.get(TOY.c1)).toBe(layout.laneDown);
+    expect(layout.laneOfTrack.get(TOY.c2)).not.toBe(layout.laneDown);
+  });
+
+  it('gives the running lane to the through road however the roads are listed', () => {
+    // Without `fillOrder` on the bidirectional bucket this is the case that
+    // breaks: list the loop first and it takes the running lane, so the train
+    // standing aside is drawn dead straight and the one going past swerves.
+    const doc = singleTrackToy();
+    const c = doc.stations.byId[TOY.stationC]!;
+    c.trackIds = [TOY.c2, TOY.c1, TOY.c3];
+    const layout = computeLineLayout(doc);
+    expect(layout.laneOfTrack.get(TOY.c1)).toBe(layout.laneDown);
+    expect(layout.laneOfTrack.get(TOY.c2)).not.toBe(layout.laneDown);
+  });
+
+  it('draws one rail per section, not two stacked on the same lane', () => {
+    const layout = computeLineLayout(singleTrackToy());
+    const sections = layout.lanes.filter((l) => l.kind === 'section');
+    expect(sections).toHaveLength(3);
+    for (const s of sections) {
+      expect(s.kind === 'section' && s.bidirectional).toBe(true);
+      expect(s.index).toBe(layout.laneDown);
+    }
+  });
+
+  it('joins the loop to the running lane with one lead, not two', () => {
+    // The loop serves both directions, and on a single line both directions
+    // are the same lane. Two identical leads would be drawn on top of
+    // each other.
+    const layout = computeLineLayout(singleTrackToy());
+    const loop = layout.stations
+      .find((s) => s.stationId === TOY.stationC)!
+      .trackLanes.find((l) => l.trackId === TOY.c2)!;
+    expect(loop.leadLanes).toEqual([layout.laneDown]);
+  });
+
+  it('leaves the double-track fixture exactly as it was', () => {
+    const layout = computeLineLayout(toyProjectCopy());
+    expect(layout.laneDown).toBe(0);
+    expect(layout.laneUp).toBe(2);
+    expect(layout.lanes.filter((l) => l.kind === 'section')).toHaveLength(6);
+    expect(
+      layout.lanes.some((l) => l.kind === 'section' && l.bidirectional === true),
+    ).toBe(false);
   });
 });

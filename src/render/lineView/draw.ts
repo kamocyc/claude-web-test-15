@@ -165,7 +165,7 @@ export function drawLineStatic(ctx: DrawContext, env: LineDrawEnv): void {
     ctx.moveTo(sx0, y);
     ctx.lineTo(sx1, y);
     ctx.stroke();
-    drawDirectionTicks(ctx, sx0, sx1, y, lane.direction, theme);
+    drawDirectionTicks(ctx, sx0, sx1, y, lane.direction, theme, lane.bidirectional === true);
   }
 
   // -- yards ----------------------------------------------------------------
@@ -392,17 +392,29 @@ function drawDirectionTicks(
   y: number,
   direction: 'down' | 'up',
   theme: RenderTheme,
+  bidirectional = false,
 ): void {
   const mid = (sx0 + sx1) / 2;
   if (sx1 - sx0 < 30) return;
-  const dir = direction === 'down' ? 1 : -1;
   ctx.strokeStyle = theme.textFaint;
   ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(mid - 4 * dir, y - 4);
-  ctx.lineTo(mid + 4 * dir, y);
-  ctx.lineTo(mid - 4 * dir, y + 4);
-  ctx.stroke();
+  // 単線: back-to-back chevrons on the one rail. Overlaying a down arrow and
+  // an up arrow at the same point would draw a bow tie and say nothing; a
+  // pair pointing away from each other says "both ways, over this" at a
+  // glance, which is the fact a single line has to convey.
+  const marks: Array<{ at: number; dir: 1 | -1 }> = bidirectional
+    ? [
+        { at: mid - 6, dir: -1 },
+        { at: mid + 6, dir: 1 },
+      ]
+    : [{ at: mid, dir: direction === 'down' ? 1 : -1 }];
+  for (const mark of marks) {
+    ctx.beginPath();
+    ctx.moveTo(mark.at - 4 * mark.dir, y - 4);
+    ctx.lineTo(mark.at + 4 * mark.dir, y);
+    ctx.lineTo(mark.at - 4 * mark.dir, y + 4);
+    ctx.stroke();
+  }
 }
 
 // ---------------------------------------------------------------------------
