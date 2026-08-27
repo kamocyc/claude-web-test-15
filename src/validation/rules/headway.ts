@@ -9,12 +9,12 @@
 import type { LinkId, StationId, TrainId } from '@/domain/ids';
 import type { Direction } from '@/domain/model';
 import { buildLinkLookup, directionBetween } from '@/domain/project';
-import { formatDuration } from '@/domain/time';
+import { formatDuration, overlapSeconds } from '@/domain/time';
 import type { Sec } from '@/domain/units';
 import { hhmmss, orderedTimelines, stationName, trainName } from '../helpers';
 import { issueId, type Issue, type Rule, type ValidationContext } from '../types';
 
-interface Traversal {
+export interface Traversal {
   trainId: TrainId;
   stopIndex: number;
   enter: Sec;
@@ -135,6 +135,95 @@ export const headwayOvertakeMidSection: Rule = {
               { kind: 'link', linkId },
             ],
             at: b.enter,
+          });
+        }
+      }
+    }
+    return out;
+  },
+};
+
+/**
+ * 単線での行き違い — two trains in the same section at once, going opposite ways.
+ *
+ * This is the check that makes `Link.trackCount` mean something. The field has
+ * always been in the model and has always been editable, but nothing read it,
+ * so a document could state that a section was 単線 and then run a down train
+ * and an up train through it at the same moment without a word of complaint.
+ *
+ * The question is asked per link rather than per line, because "this section
+ * is single track" is a local fact and a real railway mixes the two freely.
+ * (The line *view* cannot: see `isSingleTrackLine`.)
+ *
+ * ## What this rule does NOT report
+ *
+ * **A meet at a station with only one road.** `track.doubleOccupancy` already
+ * owns that: both trains end up on the same 番線 and it says so, with the
+ * approach and clearing margins and the exact overlap. A second rule phrased
+ * as "there is no loop here" would say less, later, and about the same fact.
+ * Two trains standing at one station is a station problem; two trains *in a
+ * section* is this one.
+ *
+ * **Following moves.** Two trains the same way down a single-track section are
+ * spacing, not opposition, and `headway.section` measures it on both the entry
+ * and the exit.
+ *
+ * ## Why `overlapSeconds` and not a margin
+ *
+ * The test is bare occupancy: the section is clear, or it is not. Touching
+ * intervals — one train's exit exactly at the other's entry — do not fire,
+ * because a meet where one train arrives as the other departs is ordinary
+ * working and not a near miss.
+ *
+ * What is deliberately absent is a **交換余裕**: the seconds a real single line
+ * demands between one train clearing a section and the opposing one being
+ * given it. That number comes from the block system — タブレット, スタフ,
+ * 特殊自動 — and the model has no block system, so there is no honest place to
+ * get it from. `Link.minHeadwaySec` is not it; that is the following interval,
+ * which is a different quantity that happens to be measured in seconds.
+ */
+export const headwaySingleTrackOpposing: Rule = {
+  id: 'headway.singleTrackOpposing',
+  name: '単線での行き違い',
+  defaultSeverity: 'error',
+  scope: ['trains', 'infrastructure'],
+  run(ctx) {
+    const out: Issue[] = [];
+
+    // Regroup by link. `traversalsByLink` keys on `${linkId}|${direction}`,
+    // and reconstructing that string here would make this rule depend on the
+    // shape of a key rather than on the data.
+    const byLink = new Map<LinkId, { down: Traversal[]; up: Traversal[] }>();
+    for (const { linkId, direction, list } of traversalsByLink(ctx).values()) {
+      if (ctx.doc.links.byId[linkId]?.trackCount !== 1) continue;
+      const bucket = byLink.get(linkId) ?? { down: [], up: [] };
+      bucket[direction] = list;
+      byLink.set(linkId, bucket);
+    }
+
+    for (const [linkId, { down, up }] of byLink) {
+      const link = ctx.doc.links.byId[linkId];
+      const sectionLabel = link
+        ? `${stationName(ctx.doc, link.fromStationId)}〜${stationName(ctx.doc, link.toStationId)}`
+        : String(linkId);
+
+      for (const d of down) {
+        for (const u of up) {
+          const overlap = overlapSeconds(d.enter, d.exit, u.enter, u.exit);
+          if (overlap <= 0) continue;
+          out.push({
+            id: issueId('headway.singleTrackOpposing', linkId, d.trainId, u.trainId),
+            ruleId: 'headway.singleTrackOpposing',
+            severity: 'error',
+            title: '単線区間で行き違いが発生しています',
+            detail: `${sectionLabel} は単線です: ${trainName(ctx.doc, d.trainId)} (下り ${hhmmss(d.enter)}–${hhmmss(d.exit)}) と ${trainName(ctx.doc, u.trainId)} (上り ${hhmmss(u.enter)}–${hhmmss(u.exit)}) が ${formatDuration(overlap)} 重なっています。行き違いは駅で行ってください。`,
+            refs: [
+              { kind: 'train', trainId: d.trainId, stopIndex: d.stopIndex },
+              { kind: 'train', trainId: u.trainId, stopIndex: u.stopIndex },
+              { kind: 'link', linkId },
+            ],
+            at: Math.max(d.enter, u.enter),
+            km: ctx.idx.kmOfStation.get(d.fromStationId) ?? 0,
           });
         }
       }

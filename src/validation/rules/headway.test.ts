@@ -67,3 +67,64 @@ describe('headway.overtakeMidSection', () => {
     expect(issue.detail).toContain('駅間');
   });
 });
+
+describe('headway.singleTrackOpposing', () => {
+  it('does not fire on the clean fixture', () => {
+    // Every section of the toy line is double track, so the rule has nothing
+    // to look at however the trains are timed.
+    expect(issuesFor(toyProject(), 'headway.singleTrackOpposing')).toEqual([]);
+  });
+
+  it('does not fire when a single-track section is used by one train at a time', () => {
+    const doc = toyProjectCopy();
+    doc.links.byId[TOY.linkCD]!.trackCount = 1;
+    // C→D down is 08:08:30–08:10:30 and 08:06:30–08:08:00; D→C up is
+    // 08:20–08:22. The section is single, and it is never shared.
+    expect(issuesFor(doc, 'headway.singleTrackOpposing')).toEqual([]);
+  });
+
+  it('fires when an up train and a down train share a single-track section', () => {
+    const doc = toyProjectCopy();
+    doc.links.byId[TOY.linkCD]!.trackCount = 1;
+    // Bring the 入庫 forward into the local's C→D run: down 08:08:30–08:10:30
+    // against up 08:09:00–08:11:00 is 90 seconds of the same rails.
+    const up = doc.trains.byId[TOY.depotIn]!;
+    up.stops[0]!.dep = 8 * H + 9 * M;
+    up.stops[1]!.arr = 8 * H + 11 * M;
+    up.stops[1]!.dep = 8 * H + 11 * M + 30;
+
+    const issue = expectIssue(
+      doc,
+      'headway.singleTrackOpposing',
+      'headway.singleTrackOpposing#lnk-3|trn-1|trn-4',
+      'error',
+    );
+    expect(issue.detail).toContain('単線');
+    expect(issue.detail).toContain('1分30秒');
+    expect(issue.refs).toContainEqual({ kind: 'link', linkId: TOY.linkCD });
+  });
+
+  it('does not fire on trains that merely touch at the section boundary', () => {
+    // The down train is clear of the section at the instant the up train is
+    // given it. That is ordinary working on a single line, not a near miss.
+    const doc = toyProjectCopy();
+    doc.links.byId[TOY.linkCD]!.trackCount = 1;
+    const up = doc.trains.byId[TOY.depotIn]!;
+    up.stops[0]!.dep = 8 * H + 10 * M + 30;
+    up.stops[1]!.arr = 8 * H + 12 * M + 30;
+    up.stops[1]!.dep = 8 * H + 13 * M;
+    expect(issuesFor(doc, 'headway.singleTrackOpposing')).toEqual([]);
+  });
+
+  it('leaves following moves to headway.section', () => {
+    // Two down trains nose to tail on a single-track section is a spacing
+    // question, and this rule is only about opposition.
+    const doc = toyProjectCopy();
+    doc.links.byId[TOY.linkAB]!.trackCount = 1;
+    doc.trains.byId[TOY.expressDown]!.stops[0]!.dep = 8 * H + 1 * M;
+    expect(issuesFor(doc, 'headway.singleTrackOpposing')).toEqual([]);
+    expect(idsFor(doc, 'headway.section')).toContain(
+      'headway.section#lnk-1|down|enter|trn-1|trn-2',
+    );
+  });
+});

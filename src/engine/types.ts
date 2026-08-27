@@ -48,6 +48,8 @@ export interface TrainEvent {
   at: Sec;
   /** True when this dwell exists so another train can overtake. */
   isOvertakeWait: boolean;
+  /** True when this dwell exists so an opposing train can pass — 交換. */
+  isMeetWait: boolean;
 }
 
 /** One road a formation stands on during a layover, from `from` onwards. */
@@ -122,6 +124,32 @@ export interface OvertakeEvent {
   reason?: 'noPassingTrack' | 'trackNotOvertakeCapable';
 }
 
+/**
+ * 交換(行き違い) — two opposing trains standing at the same station at the
+ * same time because the section beyond is single track.
+ *
+ * The mirror image of `OvertakeEvent`: a 待避 is a faster train passing a
+ * slower one going the *same* way, a 交換 is two trains going *opposite* ways
+ * getting past each other. On a double-track line the second never has to
+ * happen; on a single-track line it is the only way two trains can coexist.
+ *
+ * Deliberately descriptive rather than judgemental — there is no `legal` flag
+ * here, unlike `OvertakeEvent`. Whether the meet is possible is a question
+ * about roads, and `track.doubleOccupancy` already answers it: give a station
+ * one road and put two trains on it and the occupancy check fires, with the
+ * margins and the timings spelled out. A second opinion phrased as
+ * "there is no loop here" would say less, later.
+ */
+export interface MeetEvent {
+  stationId: StationId;
+  downTrainId: TrainId;
+  upTrainId: TrainId;
+  /** The moment both are standing here — the later of the two arrivals. */
+  at: Sec;
+  /** How long the two stand here together. */
+  overlapSec: number;
+}
+
 export interface ConnectionEvent {
   stationId: StationId;
   direction: Direction;
@@ -157,6 +185,7 @@ export interface TimetableIndex {
   dutyOfTrain: Map<TrainId, DutyId>;
   formationOfTrain: Map<TrainId, FormationId>;
   overtakes: OvertakeEvent[];
+  meets: MeetEvent[];
   connections: ConnectionEvent[];
 }
 
@@ -171,6 +200,8 @@ export type DwellReason =
   | 'turnback'
   | 'operational'
   | 'overtakeWait'
+  /** 交換待ち — held for an opposing train on a single-track line. */
+  | 'meetWait'
   | 'depot';
 
 export type TrainPhase =

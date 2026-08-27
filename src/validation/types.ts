@@ -113,6 +113,7 @@ export type RuleId =
   // between trains on the open line
   | 'headway.section'
   | 'headway.overtakeMidSection'
+  | 'headway.singleTrackOpposing'
   // station tracks / 構内ダイヤ
   | 'track.doubleOccupancy'
   | 'track.unassigned'

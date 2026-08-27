@@ -34,7 +34,11 @@ import {
   trainNotCovered,
 } from './rules/duty';
 import { formationDoubleBooked, formationInsufficientFleet } from './rules/formation';
-import { headwayOvertakeMidSection, headwaySection } from './rules/headway';
+import {
+  headwayOvertakeMidSection,
+  headwaySection,
+  headwaySingleTrackOpposing,
+} from './rules/headway';
 import {
   inspectionConflictsWithDuty,
   inspectionDepotNotCapable,
@@ -82,6 +86,7 @@ export const RULES: Record<RuleId, Rule> = {
 
   'headway.section': headwaySection,
   'headway.overtakeMidSection': headwayOvertakeMidSection,
+  'headway.singleTrackOpposing': headwaySingleTrackOpposing,
 
   'track.doubleOccupancy': trackDoubleOccupancy,
   'track.unassigned': trackUnassigned,

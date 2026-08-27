@@ -526,7 +526,9 @@ function labelTail(train: TrainRuntime): string {
   const state =
     phase.phase === 'dwelling' && phase.reason === 'overtakeWait'
       ? ' 待避'
-      : phase.phase === 'layover'
+      : phase.phase === 'dwelling' && phase.reason === 'meetWait'
+        ? ' 交換'
+        : phase.phase === 'layover'
         ? ' 折返'
         : '';
   const formation =
@@ -617,7 +619,11 @@ function drawTrain(
   const baseColor = type?.color ?? theme.accent;
   const color = dimmed ? withAlpha(desaturate(baseColor, 0.8), 0.4) : baseColor;
   const phase = train.phase;
-  const waiting = phase.phase === 'dwelling' && phase.reason === 'overtakeWait';
+  // 待避 and 交換 are the same fact to a reader of the picture — this train is
+  // being held here for another one — so they get the same ring.
+  const waiting =
+    phase.phase === 'dwelling' &&
+    (phase.reason === 'overtakeWait' || phase.reason === 'meetWait');
 
   // 待避中 ring first, so the dot sits inside it.
   if (waiting && !dimmed) {

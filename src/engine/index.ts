@@ -9,6 +9,7 @@ export { buildIndex } from './buildIndex';
 export { trainRuntimeAt, interpolateKm } from './position';
 export { snapshotAt, snapshotInto, createEmptySnapshot } from './snapshot';
 export { detectOvertakes, detectConnections } from './overtake';
+export { detectMeets } from './meet';
 export { buildTrackIntervals } from './occupancy';
 export { computeInspectionStatus, currentOdometerKm } from './inspection';
 export { createClockDriver } from './clock';

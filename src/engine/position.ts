@@ -174,6 +174,7 @@ function dwellReason(
   if (isDepot) return 'depot';
   if (stop?.operation === 'turnback') return 'turnback';
   if (event.isOvertakeWait) return 'overtakeWait';
+  if (event.isMeetWait) return 'meetWait';
   if (stop?.operational === true) return 'operational';
   return 'passenger';
 }

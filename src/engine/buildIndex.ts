@@ -24,6 +24,7 @@ import {
 } from '@/domain/project';
 import { entityList, type IsoDate } from '@/domain/units';
 import { buildTrackIntervals } from './occupancy';
+import { detectMeets } from './meet';
 import { detectConnections, detectOvertakes } from './overtake';
 import { LAYOVER_SHUNT_SEC } from './position';
 import type { LayoverBerth, TimetableIndex, TrainEvent, TrainTimeline } from './types';
@@ -176,6 +177,7 @@ export function buildIndex(doc: ProjectDocument, date?: IsoDate): TimetableIndex
         kind: stop.kind,
         at,
         isOvertakeWait: false,
+        isMeetWait: false,
       };
       if (stop.trackId !== undefined) event.trackId = stop.trackId;
       if (stop.arr !== undefined) event.arr = stop.arr;
@@ -249,6 +251,20 @@ export function buildIndex(doc: ProjectDocument, date?: IsoDate): TimetableIndex
       }
     }
   }
+  // 交換 is marked on *both* trains, unlike 待避 which marks only the one that
+  // stood aside. In a meet neither train is the one being held: each is
+  // waiting for the other, and the single track between them is what makes
+  // both of them wait.
+  const meets = detectMeets(doc, timelines);
+  for (const meet of meets) {
+    for (const trainId of [meet.downTrainId, meet.upTrainId]) {
+      const tl = timelines.get(trainId);
+      if (!tl) continue;
+      for (const event of tl.events) {
+        if (event.stationId === meet.stationId) event.isMeetWait = true;
+      }
+    }
+  }
   const connections = detectConnections(doc, timelines, overtakes);
   const trackIntervals = buildTrackIntervals(doc, timelines);
 
@@ -265,6 +281,7 @@ export function buildIndex(doc: ProjectDocument, date?: IsoDate): TimetableIndex
     dutyOfTrain,
     formationOfTrain,
     overtakes,
+    meets,
     connections,
   };
 }
