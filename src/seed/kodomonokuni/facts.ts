@@ -293,8 +293,6 @@ interface StationSpec {
   kana: string;
   code?: string;
   km: number;
-  /** Clear running time from the previous station on the chain. */
-  runSecFromPrev?: number;
   minDwellSec: number;
   minTurnbackSec: number;
   layout: LayoutKind;
@@ -311,7 +309,6 @@ const STATION_SPECS: readonly StationSpec[] = [
     name: '長津田検車区',
     kana: 'ながつたけんしゃく',
     km: -0.6,
-    runSecFromPrev: 90, // yard speed
     minDwellSec: 30,
     minTurnbackSec: 300,
     layout: 'depotYard',
@@ -330,7 +327,12 @@ const STATION_SPECS: readonly StationSpec[] = [
     minTurnbackSec: 180,
     layout: 'throughTerminus',
     transfers: ['東急田園都市線', 'JR横浜線'],
-    crewChange: true,
+    // 乗務員基地. The shed is a base too — a driver taking the 出庫 out signs
+    // on there — but 長津田 has to be one as well, and that is not a detail:
+    // only the six empty moves touch the shed, so a covering that could only
+    // begin and end there would have to 添乗 every single duty into place over
+    // those six trains. Crews on a shuttle report to the station.
+    crewBase: true,
   },
   {
     key: 'onda',
@@ -338,7 +340,6 @@ const STATION_SPECS: readonly StationSpec[] = [
     kana: 'おんだ',
     code: 'KD02',
     km: 1.8,
-    runSecFromPrev: 120,
     minDwellSec: 20,
     minTurnbackSec: 180,
     layout: 'passingLoop',
@@ -348,7 +349,6 @@ const STATION_SPECS: readonly StationSpec[] = [
     name: '長津田工場',
     kana: 'ながつたこうじょう',
     km: 2.2,
-    runSecFromPrev: 60,
     minDwellSec: 30,
     minTurnbackSec: 300,
     layout: 'works',
@@ -361,10 +361,21 @@ const STATION_SPECS: readonly StationSpec[] = [
     kana: 'こどものくに',
     code: 'KD03',
     km: 3.4,
-    runSecFromPrev: 100,
     minDwellSec: 20,
     minTurnbackSec: 180,
     layout: 'stubTerminus',
+    // 交代可能駅, though no relief is actually planned here.
+    //
+    // The model's edge for a crew is "can this person get from that train to
+    // this one, at this station", and a driver reversing a two-car set at a
+    // terminus is exactly that move — the same person, the same stock, the
+    // other end of the train. Leaving こどもの国 out makes it impossible for
+    // anybody to work a down train and then the up train it becomes, which on
+    // a shuttle is the only shape a duty has: the covering falls apart into
+    // one duty per pair of trains, each one 添乗ed into place from 長津田.
+    //
+    // The relief that is actually planned on this line all happens at 長津田.
+    crewChange: true,
   },
 ];
 
@@ -520,7 +531,20 @@ export function buildKodomonokuniFacts(): Facts {
   const specOf = (key: StationKey): StationSpec =>
     STATION_SPECS.find((s) => s.key === key)!;
 
-  function pushLink(from: StationKey, to: StationKey, maxSpeedKmh: number): void {
+  /**
+   * `baseRunSec` is passed rather than read off the destination station,
+   * because a `Link` is always oriented low-km → high-km and the yard sits at
+   * *negative* km: the depot stub's run time belongs to the depot, but the
+   * destination of its link is 長津田. Reading it off the destination — which
+   * is what a line whose yard is beyond its terminus can get away with —
+   * would silently fall back to a default here.
+   */
+  function pushLink(
+    from: StationKey,
+    to: StationKey,
+    baseRunSec: number,
+    maxSpeedKmh: number,
+  ): void {
     const id = nextLink<'Link'>();
     const a = specOf(from);
     const b = specOf(to);
@@ -538,14 +562,13 @@ export function buildKodomonokuniFacts(): Facts {
       minHeadwaySec: 180,
       maxSpeedKmh,
     });
-    const base = b.runSecFromPrev ?? 60;
-    linkRunTimes.push({ linkId: id, profileId: y000.id, baseRunSec: base, ...PENALTY });
+    linkRunTimes.push({ linkId: id, profileId: y000.id, baseRunSec, ...PENALTY });
   }
 
-  pushLink('nagatsutaDepot', 'nagatsuta', 25);
-  pushLink('nagatsuta', 'onda', 70);
-  pushLink('onda', 'nagatsutaWorks', 25);
-  pushLink('onda', 'kodomonokuni', 70);
+  pushLink('nagatsutaDepot', 'nagatsuta', 90, 25);
+  pushLink('nagatsuta', 'onda', 120, 70);
+  pushLink('onda', 'nagatsutaWorks', 60, 25);
+  pushLink('onda', 'kodomonokuni', 100, 70);
 
   const runTimeByKey = new Map<string, LinkRunTime>();
   const linkById = new Map<LinkId, Link>(links.map((l) => [l.id, l]));
@@ -569,7 +592,7 @@ export function buildKodomonokuniFacts(): Facts {
     name: '長津田検車区',
     stationId: S.nagatsutaDepot,
     attachedStationId: S.nagatsuta,
-    accessRunSec: 120,
+    accessRunSec: 110,
     prepSec: 300,
     capacityFormations: 4,
     capacityCars: 16,

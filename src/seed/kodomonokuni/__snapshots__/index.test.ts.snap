@@ -1,0 +1,54 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`こどもの国線 — determinism > has a stable digest 1`] = `
+{
+  "assignments": 3,
+  "connectionStops": 0,
+  "crew": 8,
+  "crewAssignments": 8,
+  "crewDuties": 8,
+  "crewDutiesByRole": {
+    "driver": 8,
+  },
+  "crewLegsByKind": {
+    "standby": 129,
+    "train": 140,
+  },
+  "crewWorkHours": 12,
+  "deadheadTrains": 6,
+  "duties": 3,
+  "dutiesByCars": {
+    "2": 3,
+  },
+  "formations": 3,
+  "formationsByCars": {
+    "2": 3,
+  },
+  "inspectionRecords": 13,
+  "links": 4,
+  "overtakenStops": 0,
+  "peakConcurrentCrewDuties": 3,
+  "peakConcurrentDuties": 2,
+  "serviceTrains": 134,
+  "stationTracks": 10,
+  "stations": 5,
+  "totalKm": 466,
+  "trains": 140,
+  "trainsByBand": {
+    "(回送)": 6,
+    "amPeak": 20,
+    "early": 12,
+    "midday": 42,
+    "night": 30,
+    "pmPeak": 30,
+  },
+  "trainsByDirection": {
+    "down": 70,
+    "up": 70,
+  },
+  "trainsByType": {
+    "各駅停車": 134,
+    "回送": 6,
+  },
+}
+`;
