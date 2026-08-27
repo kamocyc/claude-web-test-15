@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+import { BASE_PATH } from './vite.config';
+
 /**
  * Chromium is preinstalled in this environment at /opt/pw-browsers/chromium
  * (build 141.0.7390.37). We point `executablePath` at it explicitly so
@@ -7,6 +9,15 @@ import { defineConfig, devices } from '@playwright/test';
  * a browser. Never run `playwright install` here.
  */
 const CHROMIUM = process.env.PW_CHROMIUM_PATH ?? '/opt/pw-browsers/chromium';
+
+/**
+ * The preview server serves the built app under `base`, not at the root, so
+ * both the readiness probe and every navigation have to include it. Pointing
+ * either at `/` gets an index page whose asset URLs all 404 — the app never
+ * boots, and every spec fails in `waitReady` with no clue why.
+ */
+const ORIGIN = 'http://127.0.0.1:4173';
+const APP_URL = `${ORIGIN}${BASE_PATH}`;
 
 export default defineConfig({
   testDir: './e2e',
@@ -17,7 +28,7 @@ export default defineConfig({
   timeout: 90_000,
   expect: { timeout: 15_000 },
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: APP_URL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     viewport: { width: 1600, height: 1000 },
@@ -26,7 +37,7 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     command: 'npm run build && npm run preview',
-    url: 'http://127.0.0.1:4173',
+    url: APP_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,
     stdout: 'pipe',

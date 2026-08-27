@@ -96,7 +96,7 @@ export function Inspector() {
         return [
           ['駅間', `${getEntity(doc.stations, link.fromStationId)?.name ?? ''} — ${getEntity(doc.stations, link.toStationId)?.name ?? ''}`],
           ['距離', formatKm(link.distance)],
-          ['線路数', String(link.trackCount)],
+          ['線路数', link.trackCount === 1 ? '単線' : '複線'],
           ['最小時隔', `${link.minHeadwaySec}秒`],
         ];
       }

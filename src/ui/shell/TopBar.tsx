@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { TID } from '@e2e/testids';
 
+import type { ProjectDocument } from '@/domain/model';
 import { createEmptyProject } from '@/domain/project';
 import { downloadText, pickTextFile } from '@/io/fileIO';
 import { fromJson, suggestFileName, toJson } from '@/io/serialize';
-import { buildOimachiProject } from '@/seed';
+import { buildKodomonokuniProject, buildOimachiProject } from '@/seed';
 import { useProjectStore } from '@/store/projectStore';
 
 import { TransportBar } from './TransportBar';
@@ -55,11 +56,15 @@ export function TopBar({ onMessage }: TopBarProps) {
     onMessage('新規プロジェクトを作成しました');
   };
 
-  const loadSample = (): void => {
+  /**
+   * Two samples now, and they are two *documents*: a project models exactly
+   * one line, so loading one replaces the other rather than adding to it.
+   */
+  const loadSample = (build: () => ProjectDocument): void => {
     setMenuOpen(false);
     try {
       // One command, so a single Ctrl+Z puts the previous project back.
-      dispatch({ type: 'project/replace', doc: buildOimachiProject(), label: 'サンプル読込' });
+      dispatch({ type: 'project/replace', doc: build(), label: 'サンプル読込' });
       onMessage('サンプルを読み込みました');
     } catch (err) {
       // The generator can legitimately give up (e.g. no platform fits a slot).
@@ -103,8 +108,19 @@ export function TopBar({ onMessage }: TopBarProps) {
             <button type="button" data-testid={TID.menuNewProject} onClick={newProject}>
               新規プロジェクト
             </button>
-            <button type="button" data-testid={TID.menuLoadSample} onClick={loadSample}>
-              サンプル読込
+            <button
+              type="button"
+              data-testid={TID.menuLoadSample('oimachi')}
+              onClick={() => loadSample(buildOimachiProject)}
+            >
+              サンプル読込 — 大井町線 (複線)
+            </button>
+            <button
+              type="button"
+              data-testid={TID.menuLoadSample('kodomonokuni')}
+              onClick={() => loadSample(buildKodomonokuniProject)}
+            >
+              サンプル読込 — こどもの国線 (単線)
             </button>
             <button type="button" data-testid={TID.menuImport} onClick={importProject}>
               インポート

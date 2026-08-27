@@ -56,7 +56,9 @@ export class AppPage {
 
   /** Open the app in deterministic mode and wait until the first index exists. */
   async open(query = 'e2e=1'): Promise<void> {
-    await this.page.goto(`/?${query}`);
+    // Relative, so it resolves against `baseURL` — which carries the
+    // production `base` path the preview server serves the build under.
+    await this.page.goto(`?${query}`);
     await this.waitReady();
   }
 
@@ -98,13 +100,18 @@ export class AppPage {
 
   private async openFileMenu(): Promise<void> {
     await this.page.getByTestId(TID.menuFile).click();
-    await expect(this.page.getByTestId(TID.menuLoadSample)).toBeVisible();
+    await expect(this.page.getByTestId(TID.menuLoadSample('oimachi'))).toBeVisible();
   }
 
-  /** Load 東急大井町線 through the real menu item. */
-  async loadSample(): Promise<void> {
+  /**
+   * Load a bundled sample through the real menu item.
+   *
+   * Defaults to 大井町線 so every spec written before there was a second one
+   * still says what it meant.
+   */
+  async loadSample(line: 'oimachi' | 'kodomonokuni' = 'oimachi'): Promise<void> {
     await this.openFileMenu();
-    await this.page.getByTestId(TID.menuLoadSample).click();
+    await this.page.getByTestId(TID.menuLoadSample(line)).click();
     await expect(this.page.getByTestId(TID.statusBar)).toContainText('サンプルを読み込みました');
     await this.settle();
   }

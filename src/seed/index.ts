@@ -1188,6 +1188,11 @@ function buildInspectionHistory(
   return out;
 }
 
+export {
+  buildKodomonokuniProject,
+  lastKodomonokuniBuildReport,
+  type BuildReport as KodomonokuniBuildReport,
+} from './kodomonokuni';
 export { projectDigest, type SeedDigest } from './digest';
 export { SeedError } from './errors';
 

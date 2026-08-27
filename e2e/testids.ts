@@ -12,7 +12,7 @@ export const TID = {
   navLink: (route: string) => `nav-${route}`,
   menuFile: 'menu-file',
   menuNewProject: 'menu-new-project',
-  menuLoadSample: 'menu-load-sample',
+  menuLoadSample: (line: 'oimachi' | 'kodomonokuni') => `menu-load-sample-${line}` as const,
   menuImport: 'menu-import',
   menuExport: 'menu-export',
   undo: 'undo',
