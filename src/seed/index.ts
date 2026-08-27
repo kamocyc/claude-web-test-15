@@ -684,7 +684,7 @@ export function buildOimachiProject(): ProjectDocument {
       nextNumber: nextDeadheadNumber,
     },
     {
-      stationKey: 'jiyugaoka',
+      stationId: facts.S.jiyugaoka,
       cars: CARS.local,
       arriveBy: JIYUGAOKA_HOLD_FROM_SEC,
       departAfter: JIYUGAOKA_HOLD_TO_SEC,

@@ -26,7 +26,7 @@ import type { StationId, TrainId } from '@/domain/ids';
 import type { Depot, Direction, Train, TrainStop } from '@/domain/model';
 import type { Sec } from '@/domain/units';
 import { SeedError } from '../errors';
-import { NO_OIMACHI_PLATFORM_KEYS, type Facts, type StationKey } from '../oimachi/facts';
+import type { GeneratorFacts } from './facts';
 import { timeRoute, type RouteStop } from './stopTimes';
 import type { DutyNode } from './dutyMatch';
 import type { AssignableTrain, PinnedEnd, TrackBooking } from './trackAssign';
@@ -54,11 +54,9 @@ export const DEPOT_TURN_MARGIN_SEC = 240;
  */
 const SEARCH_STEP_SEC = 5;
 const SEARCH_STEPS = 1200; // 100 minutes either side of the ideal
-/** 続行時隔 demanded of a 回送 against every already-placed train. */
-const DEADHEAD_HEADWAY_SEC = 95;
 
 export interface DepotRunContext {
-  facts: Facts;
+  facts: GeneratorFacts;
   depot: Depot;
   booking: TrackBooking;
   nextTrainId: () => TrainId;
@@ -76,11 +74,6 @@ export interface DepotRunPair {
   inShiftSec: number;
 }
 
-/** The full km-ordered chain including the depot stub. */
-function depotAxis(facts: Facts): StationKey[] {
-  return [...facts.axis, 'saginumaDepot'];
-}
-
 /**
  * The 回送's path — and it is a *service-speed* path, with a 運転停車 at every
  * station a 緑各停 would call at.
@@ -96,17 +89,18 @@ function depotAxis(facts: Facts): StationKey[] {
  * 二子新地 and 高津 stay `pass`: the 大井町線 pair has no platform there, so a
  * 回送 on those rails cannot stop even if it wanted to.
  */
-function routeBetween(facts: Facts, fromKey: StationKey, toKey: StationKey): RouteStop[] {
-  const axis = depotAxis(facts);
-  const i = axis.indexOf(fromKey);
-  const j = axis.indexOf(toKey);
-  if (i < 0 || j < 0) throw new SeedError('回送経路が引けません', { from: fromKey, to: toKey });
-  if (i === j) throw new SeedError('回送の起終点が同一です', { from: fromKey });
+function routeBetween(facts: GeneratorFacts, from: StationId, to: StationId): RouteStop[] {
+  const axis = facts.deadheadAxis;
+  const i = axis.findIndex((s) => s.id === from);
+  const j = axis.findIndex((s) => s.id === to);
+  if (i < 0 || j < 0) {
+    throw new SeedError('回送経路が引けません', { from: String(from), to: String(to) });
+  }
+  if (i === j) throw new SeedError('回送の起終点が同一です', { from: String(from) });
   const slice = i < j ? axis.slice(i, j + 1) : axis.slice(j, i + 1).reverse();
-  return slice.map((key, idx) => {
-    const station = facts.stationById.get(facts.S[key])!;
+  return slice.map((station, idx) => {
     const isEnd = idx === 0 || idx === slice.length - 1;
-    const noPlatform = NO_OIMACHI_PLATFORM_KEYS.includes(key);
+    const noPlatform = facts.noPlatformAt.has(station.id);
     return {
       stationId: station.id,
       kind: !isEnd && noPlatform ? ('pass' as const) : ('stop' as const),
@@ -115,16 +109,10 @@ function routeBetween(facts: Facts, fromKey: StationKey, toKey: StationKey): Rou
   });
 }
 
-function directionOf(facts: Facts, route: readonly RouteStop[]): Direction {
+function directionOf(facts: GeneratorFacts, route: readonly RouteStop[]): Direction {
   const first = facts.stationById.get(route[0]!.stationId)!;
   const last = facts.stationById.get(route[route.length - 1]!.stationId)!;
   return last.kmFromOrigin > first.kmFromOrigin ? 'down' : 'up';
-}
-
-function keyOfStation(facts: Facts, id: StationId): StationKey {
-  const key = facts.keyOf.get(id);
-  if (key === undefined) throw new SeedError('未知の駅です', { station: String(id) });
-  return key;
 }
 
 function makeStops(
@@ -181,11 +169,10 @@ export function buildDepotRuns(
   // A 7-car empty move is a little heavier in reality, but booking it to the
   // lighter table keeps the path identical to the 各停 slots it threads between,
   // which is what makes it schedulable at all.
-  const profileId = facts.profile.car5;
-  const depotKey = keyOfStation(facts, depot.stationId);
+  const profileId = facts.deadheadProfileId;
 
   // -- 出庫: ideal, then progressively earlier ------------------------------
-  const outRoute = routeBetween(facts, depotKey, keyOfStation(facts, first.originStationId));
+  const outRoute = routeBetween(facts, depot.stationId, first.originStationId);
   const outRunSec = timeRoute(facts, outRoute, profileId, 0).arr[outRoute.length - 1]!;
   const outIdeal = first.depSec - outRunSec - depot.prepSec;
   const outTrainId = ctx.nextTrainId();
@@ -210,7 +197,7 @@ export function buildDepotRuns(
   });
 
   // -- 入庫: ideal, then progressively later --------------------------------
-  const inRoute = routeBetween(facts, keyOfStation(facts, last.terminusStationId), depotKey);
+  const inRoute = routeBetween(facts, last.terminusStationId, depot.stationId);
   const inIdeal = last.arrSec + DEPOT_TURN_MARGIN_SEC;
   const inTrainId = ctx.nextTrainId();
   const inNumber = ctx.nextNumber();
@@ -274,8 +261,8 @@ export function buildDepotRuns(
  * train leg in a duty that has no train.
  */
 export interface EmptyMoveSpec {
-  fromKey: StationKey;
-  toKey: StationKey;
+  fromStationId: StationId;
+  toStationId: StationId;
   cars: number;
   /**
    * `arriveBy` fixes the latest arrival and walks the path earlier, the way a
@@ -296,8 +283,8 @@ export function buildEmptyMove(
   spec: EmptyMoveSpec,
 ): { train: Train; shiftSec: number } {
   const { facts } = ctx;
-  const profileId = facts.profile.car5;
-  const route = routeBetween(facts, spec.fromKey, spec.toKey);
+  const profileId = facts.deadheadProfileId;
+  const route = routeBetween(facts, spec.fromStationId, spec.toStationId);
   const runSec = timeRoute(facts, route, profileId, 0).arr[route.length - 1]!;
   const number = ctx.nextNumber();
   return searchPath(ctx, {
@@ -428,11 +415,11 @@ function searchPath(
         ? {}
         : { holdTerminusUntilSec: req.holdTerminusUntilSec }),
     };
-    if (!booking.tryPlace(candidate, DEADHEAD_HEADWAY_SEC)) continue;
+    if (!booking.tryPlace(candidate, facts.deadheadHeadwaySec)) continue;
     const train: Train = {
       id: req.trainId,
       number: req.number,
-      typeId: facts.type.deadhead,
+      typeId: facts.deadheadTypeId,
       direction: req.direction,
       category: 'deadhead',
       stops,

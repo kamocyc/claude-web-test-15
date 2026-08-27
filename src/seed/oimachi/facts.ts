@@ -55,7 +55,6 @@
 
 import { ID_PREFIX, asId, makeIdFactory } from '@/domain/ids';
 import type {
-  DayTypeId,
   DepotId,
   LinkId,
   PerfProfileId,
@@ -85,6 +84,7 @@ import type {
 import { kmToMeters, type Meters } from '@/domain/units';
 import type { InspectionRuleId } from '@/domain/ids';
 import { SeedError } from '../errors';
+import type { GeneratorFacts, TrackRole } from '../generator/facts';
 
 // ---------------------------------------------------------------------------
 // Station keys
@@ -151,6 +151,23 @@ export const EXPRESS_STOP_KEYS: readonly StationKey[] = [
 /** The two stations with no 大井町線 platform. */
 export const NO_OIMACHI_PLATFORM_KEYS: readonly StationKey[] = ['futakoshinchi', 'takatsu'];
 
+/** Stations where the inner/outer pair of the 方向別複々線 has to be chosen. */
+export const QUAD_SECTION_KEYS: readonly StationKey[] = [
+  'futakoshinchi',
+  'takatsu',
+  'mizonokuchi',
+];
+
+/**
+ * 続行時隔 demanded of a 回送 against every already-placed train.
+ *
+ * Five seconds over the line's own `minHeadwaySec` of 90. The margin is
+ * deliberate: an empty move that just scrapes the minimum leaves the validator
+ * nothing, and a path found at exactly 90 s is a path the checker will call
+ * marginal for the rest of the document's life.
+ */
+export const DEADHEAD_HEADWAY_SEC = 95;
+
 /**
  * The ONLY stations at which a train may be overtaken, and in which direction.
  * The generator asserts every declared overtake against this table.
@@ -163,8 +180,6 @@ export const OVERTAKE_STATIONS: Readonly<Record<string, readonly Direction[]>> =
 // ---------------------------------------------------------------------------
 // Track layouts
 // ---------------------------------------------------------------------------
-
-type TrackRole = 'om' | 'dt' | 'stabling' | 'depot';
 
 type LayoutKind =
   | 'terminalStub' // 大井町: 頭端式1面2線
@@ -1047,26 +1062,27 @@ export const SERIES_SPECS: readonly SeriesSpec[] = [
 // Built facts
 // ---------------------------------------------------------------------------
 
-export interface Facts {
-  dayTypeId: DayTypeId;
+/**
+ * The Oimachi Line's facts: everything the generator asks of any line
+ * (`GeneratorFacts`) plus the things only this file and its own assembly step
+ * need — the station keys, the two performance profiles, the named depots.
+ *
+ * The keys stay. They are the right identifier for a hand-written table of
+ * researched places, and `facts.test.ts` reads them. What changed is that they
+ * no longer cross into `generator/`.
+ */
+export interface Facts extends GeneratorFacts {
   line: Line;
-  stations: Station[];
-  tracks: StationTrack[];
   links: Link[];
   perfProfiles: PerfProfile[];
   linkRunTimes: LinkRunTime[];
   depots: Depot[];
-  trainTypes: TrainType[];
-  stopPatterns: StopPattern[];
   formationSeries: FormationSeries[];
   inspectionRules: InspectionRule[];
 
   /** key -> StationId */
   S: Record<StationKey, StationId>;
   keyOf: Map<StationId, StationKey>;
-  stationById: Map<StationId, Station>;
-  tracksOf: Map<StationId, StationTrack[]>;
-  trackRole: Map<StationTrackId, TrackRole>;
 
   profile: Record<'car7' | 'car5', PerfProfileId>;
   type: Record<TrainTypeKey, TrainTypeId>;
@@ -1077,8 +1093,6 @@ export interface Facts {
 
   /** Stations in `down` order, depot nodes excluded. */
   axis: StationKey[];
-
-  runTime(from: StationId, to: StationId, profileId: PerfProfileId): LinkRunTime;
 }
 
 export function buildFacts(): Facts {
@@ -1428,6 +1442,21 @@ export function buildFacts(): Facts {
     depotId: { saginuma: saginumaDepot.id, nagatsuta: nagatsutaWorks.id },
     seriesId,
     axis: chain.map((s) => s.key),
+    axisStations: chain.map((s) => stationById.get(S[s.key])!),
+    // 鷺沼車庫 hangs off the far end of the line, so it goes on the end of the
+    // chain. A yard behind the origin would go on the front — the list is in
+    // km order and says which by its shape.
+    deadheadAxis: [...chain.map((s) => stationById.get(S[s.key])!), stationById.get(S.saginumaDepot)!],
+    overtakeAt: new Map(
+      (Object.keys(OVERTAKE_STATIONS) as StationKey[]).map((k) => [S[k], OVERTAKE_STATIONS[k]!]),
+    ),
+    noPlatformAt: new Set(NO_OIMACHI_PLATFORM_KEYS.map((k) => S[k])),
+    chooseRailPairAt: new Set(QUAD_SECTION_KEYS.map((k) => S[k])),
+    railPairTerminusAt: new Set([S.mizonokuchi]),
+    ownRailsOnlyAt: new Set([S.futakotamagawa]),
+    deadheadProfileId: car5.id,
+    deadheadTypeId: typeIds.deadhead,
+    deadheadHeadwaySec: DEADHEAD_HEADWAY_SEC,
     runTime(from, to, profileId) {
       const rt = runTimeByKey.get(`${from}|${to}|${profileId}`);
       if (rt === undefined) {

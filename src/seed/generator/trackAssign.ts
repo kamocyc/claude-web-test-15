@@ -65,7 +65,7 @@ import { intervalsOverlap } from '@/domain/time';
 import { canEnterFrom, defaultStubEnd, endTowards } from '@/domain/wiring';
 import type { Sec } from '@/domain/units';
 import { SeedError } from '../errors';
-import type { Facts, StationKey } from '../oimachi/facts';
+import type { GeneratorFacts } from './facts';
 
 /** Which pair of rails the train uses in the 二子玉川〜溝の口 quad section. */
 export type Routing = 'om' | 'dt';
@@ -137,9 +137,6 @@ interface YardLoad {
 
 const NO_LOAD = (): YardLoad => ({ count: 0, until: 0 });
 
-/** Stations where the inner/outer pair actually has to be chosen. */
-const QUAD_SECTION: readonly StationKey[] = ['futakoshinchi', 'takatsu', 'mizonokuchi'];
-
 interface Target {
   train: AssignableTrain;
   stopIndex: number;
@@ -198,7 +195,7 @@ export class TrackBooking {
   private mustPass = new Set<string>();
   fallbacks = 0;
 
-  constructor(private readonly facts: Facts) {
+  constructor(private readonly facts: GeneratorFacts) {
     for (const track of facts.tracks) this.occupancy.set(track.id, []);
   }
 
@@ -379,8 +376,7 @@ export class TrackBooking {
     opts: { sidingOnly?: boolean } = {},
   ): StationTrackId | undefined {
     const tracks = this.facts.tracksOf.get(stationId) ?? [];
-    const stationKey = this.facts.keyOf.get(stationId);
-    const inQuad = stationKey !== undefined && QUAD_SECTION.includes(stationKey);
+    const inQuad = this.facts.chooseRailPairAt.has(stationId);
     const ranked = [...tracks]
       .filter((t) => {
         if (t.maxCars < cars || !t.canTurnBack) return false;
@@ -617,7 +613,7 @@ function insertSorted(sorted: Sec[], at: Sec): void {
 }
 
 /** Sidings first, then depot roads, then — reluctantly — a platform face. */
-function berthScore(facts: Facts, track: StationTrack): number {
+function berthScore(facts: GeneratorFacts, track: StationTrack): number {
   const role = facts.trackRole.get(track.id);
   if (role === 'stabling') return 0;
   if (role === 'depot') return 1;
@@ -679,9 +675,9 @@ function eventsOf(train: AssignableTrain, mustPass: ReadonlySet<string>): Event[
  * Memoized per `Facts` because `permitted` asks for it once per candidate road
  * per event, and the answer depends only on the km axis.
  */
-const stubEnds = new WeakMap<Facts, Map<StationId, StationEnd>>();
+const stubEnds = new WeakMap<GeneratorFacts, Map<StationId, StationEnd>>();
 
-function stubEndAt(facts: Facts, stationId: StationId): StationEnd {
+function stubEndAt(facts: GeneratorFacts, stationId: StationId): StationEnd {
   let byStation = stubEnds.get(facts);
   if (byStation === undefined) {
     const kms = facts.stations.map((s) => s.kmFromOrigin);
@@ -705,7 +701,7 @@ function stubEndAt(facts: Facts, stationId: StationId): StationEnd {
  * which has to terminate in a 引上線 and shunt across instead.
  */
 function reachable(
-  facts: Facts,
+  facts: GeneratorFacts,
   stationId: StationId,
   track: StationTrack,
   train: AssignableTrain,
@@ -726,12 +722,12 @@ function reachable(
 
 /** Is this road usable by every stop the event has to place on it? */
 function permitted(
-  facts: Facts,
+  facts: GeneratorFacts,
   stationId: StationId,
   track: StationTrack,
   ev: Event,
 ): boolean {
-  const stationKey = facts.keyOf.get(stationId);
+  const inQuad = facts.chooseRailPairAt.has(stationId);
   const role = facts.trackRole.get(track.id);
 
   return ev.targets.every(({ train, stopIndex }) => {
@@ -742,7 +738,7 @@ function permitted(
     if (track.maxCars < train.cars) return false;
     if (!reachable(facts, stationId, track, train, stopIndex)) return false;
 
-    if (stationKey !== undefined && QUAD_SECTION.includes(stationKey)) {
+    if (inQuad) {
       const stablingOk =
         role === 'stabling' &&
         !train.isPassenger &&
@@ -764,10 +760,15 @@ function permitted(
       // document does not model, so they merely *looked* free; in fact one of
       // that line's own trains is through them every couple of minutes.
       const endsHere = isOrigin || isTerminus;
-      const needed: string =
-        stationKey === 'mizonokuchi' ? (endsHere ? 'om' : 'dt') : train.routing;
+      // `'om'` is this document's own line and `'dt'` the railway it shares
+      // rails with — see `TrackRole`.
+      const needed: string = facts.railPairTerminusAt.has(stationId)
+        ? endsHere
+          ? 'om'
+          : 'dt'
+        : train.routing;
       if (!stablingOk && role !== needed) return false;
-    } else if (stationKey === 'futakotamagawa') {
+    } else if (facts.ownRailsOnlyAt.has(stationId)) {
       // 大井町線 trains use the 大井町線 faces even when they are about to
       // cross over: the crossover itself lies in the 二子玉川〜二子新地 link.
       if (role !== 'om') return false;
@@ -786,7 +787,7 @@ function permitted(
 }
 
 function preferenceOrder(
-  facts: Facts,
+  facts: GeneratorFacts,
   stationId: StationId,
   tracks: readonly StationTrack[],
   ev: Event,

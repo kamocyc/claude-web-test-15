@@ -35,7 +35,7 @@ import type { StopKind, StopPattern, TrainStop } from '@/domain/model';
 import { roundToGrain } from '@/domain/time';
 import type { Sec } from '@/domain/units';
 import { SeedError } from '../errors';
-import { OVERTAKE_STATIONS, type Facts } from '../oimachi/facts';
+import type { GeneratorFacts } from './facts';
 import { specKey, type TrainSpec } from './expand';
 
 /**
@@ -84,7 +84,7 @@ export interface StopTimesResult {
 // ---------------------------------------------------------------------------
 
 /** The served stations of a pattern, in travel order, with their base dwell. */
-export function routeOf(facts: Facts, pattern: StopPattern): RouteStop[] {
+export function routeOf(facts: GeneratorFacts, pattern: StopPattern): RouteStop[] {
   const kmOf = (id: StationId): number => {
     const st = facts.stationById.get(id);
     if (st === undefined) throw new SeedError('unknown station in pattern', { pattern: pattern.id });
@@ -95,7 +95,7 @@ export function routeOf(facts: Facts, pattern: StopPattern): RouteStop[] {
   const lo = Math.min(originKm, terminusKm);
   const hi = Math.max(originKm, terminusKm);
 
-  let ids = facts.axis.map((k) => facts.S[k]).filter((id) => {
+  let ids = facts.axisStations.map((s) => s.id).filter((id) => {
     const km = kmOf(id);
     return km >= lo && km <= hi;
   });
@@ -129,7 +129,7 @@ export interface TimedRoute {
  * the same rules as a service train.
  */
 export function timeRoute(
-  facts: Facts,
+  facts: GeneratorFacts,
   route: readonly RouteStop[],
   profileId: PerfProfileId,
   startSec: Sec,
@@ -170,7 +170,7 @@ export function timeRoute(
 // The two-phase build
 // ---------------------------------------------------------------------------
 
-export function buildStopTimes(facts: Facts, specs: readonly TrainSpec[]): StopTimesResult {
+export function buildStopTimes(facts: GeneratorFacts, specs: readonly TrainSpec[]): StopTimesResult {
   const profileByType = new Map(facts.trainTypes.map((t) => [t.id, t.perfProfileId]));
   const patternById = new Map(facts.stopPatterns.map((p) => [p.id, p]));
   const routeCache = new Map<string, RouteStop[]>();
@@ -382,7 +382,7 @@ export function buildStopTimes(facts: Facts, specs: readonly TrainSpec[]): StopT
   return { trains, passes, resolvedOvertakes, skippedAtBandEdge, maxWaitSec };
 }
 
-function repropagate(facts: Facts, t: TimedTrain): void {
+function repropagate(facts: GeneratorFacts, t: TimedTrain): void {
   const override = facts.stopPatterns.find((p) => p.id === t.spec.stopPatternId)?.dwellOverrideSec;
   const slotOverride = t.spec.slot.dwellOverrideSec;
   const merged: Record<string, number> = { ...(override ?? {}), ...(slotOverride ?? {}) };
@@ -394,22 +394,25 @@ function repropagate(facts: Facts, t: TimedTrain): void {
   t.dep = timed.dep.map((v) => (v === undefined ? undefined : roundToGrain(v, GRAIN_SEC)));
 }
 
-function assertOvertakeLegal(facts: Facts, spec: TrainSpec, stationId: StationId): void {
-  const key = facts.keyOf.get(stationId);
-  const allowed = key === undefined ? undefined : OVERTAKE_STATIONS[key];
+function assertOvertakeLegal(facts: GeneratorFacts, spec: TrainSpec, stationId: StationId): void {
+  const allowed = facts.overtakeAt.get(stationId);
   if (allowed === undefined || !allowed.includes(spec.direction)) {
-    throw new SeedError(
-      '待避可能駅ではありません（旗の台=両方向 / 上野毛=上りのみ、それ以外は不可）',
-      {
-        band: spec.bandId, slot: spec.slotId, cycle: spec.cycleIndex,
-        station: stationName(facts, stationId),
-        direction: spec.direction,
-      },
-    );
+    // The list of legal places comes from the facts rather than the message,
+    // so a second line gets a useful error without this file knowing a thing
+    // about which stations either line has.
+    const legal = [...facts.overtakeAt]
+      .map(([id, dirs]) => `${stationName(facts, id)}=${dirs.join('/')}`)
+      .join(' ');
+    throw new SeedError('待避可能駅ではありません', {
+      band: spec.bandId, slot: spec.slotId, cycle: spec.cycleIndex,
+      station: stationName(facts, stationId),
+      direction: spec.direction,
+      allowed: legal,
+    });
   }
 }
 
-function verifyMonotonic(facts: Facts, t: TimedTrain): void {
+function verifyMonotonic(facts: GeneratorFacts, t: TimedTrain): void {
   let last = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < t.route.length; i++) {
     const a = t.arr[i];
@@ -435,7 +438,7 @@ function verifyMonotonic(facts: Facts, t: TimedTrain): void {
   }
 }
 
-function stationName(facts: Facts, id: StationId): string {
+function stationName(facts: GeneratorFacts, id: StationId): string {
   return facts.stationById.get(id)?.name ?? String(id);
 }
 

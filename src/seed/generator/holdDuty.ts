@@ -20,12 +20,11 @@ import type { DayTypeId } from '@/domain/ids';
 import type { Duty, DutyLeg, Train } from '@/domain/model';
 import type { Sec } from '@/domain/units';
 import { SeedError } from '../errors';
-import type { StationKey } from '../oimachi/facts';
 import { buildEmptyMove, type DepotRunContext } from './depotRuns';
 
 export interface HoldDutySpec {
   /** Where the formation is held. Must have a 引上線 or a 留置線. */
-  stationKey: StationKey;
+  stationId: StationId;
   cars: number;
   /** Latest arrival of the 出庫回送. */
   arriveBy: Sec;
@@ -46,16 +45,14 @@ export interface HoldDutyResult {
 }
 
 export function buildHoldDuty(ctx: DepotRunContext, spec: HoldDutySpec): HoldDutyResult {
-  const { facts, depot } = ctx;
-  const depotKey = facts.keyOf.get(depot.stationId);
-  if (depotKey === undefined) throw new SeedError('車庫の駅キーが不明です');
-  const stationId = facts.S[spec.stationKey];
+  const { depot } = ctx;
+  const stationId = spec.stationId;
 
   // Out first, because the berth cannot be claimed until both ends of the hold
   // are known, and the arrival is the end that moves.
   const out = buildEmptyMove(ctx, {
-    fromKey: depotKey,
-    toKey: spec.stationKey,
+    fromStationId: depot.stationId,
+    toStationId: stationId,
     cars: spec.cars,
     anchor: { kind: 'arriveBy', at: spec.arriveBy },
     markFirst: 'depotOut',
@@ -67,8 +64,8 @@ export function buildHoldDuty(ctx: DepotRunContext, spec: HoldDutySpec): HoldDut
     preferStablingAtTerminus: false,
   });
   const inbound = buildEmptyMove(ctx, {
-    fromKey: spec.stationKey,
-    toKey: depotKey,
+    fromStationId: stationId,
+    toStationId: depot.stationId,
     cars: spec.cars,
     anchor: { kind: 'departAfter', at: spec.departAfter },
     markFirst: 'turnback',
